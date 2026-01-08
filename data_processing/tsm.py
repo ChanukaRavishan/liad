@@ -3,8 +3,7 @@ import numpy as np
 from math import radians, sin, cos, sqrt, atan2
 from joblib import Parallel, delayed
 import math
-import argparse
-import ArgumentParser
+from argparse import ArgumentParser
 import os
 
 # ---------- CONFIG ----------

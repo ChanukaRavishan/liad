@@ -33,5 +33,6 @@ echo "  ALL DONE SUCCESSFULLY"
 echo "=============================="
 
 
-
+# make it an executable script 
+    chmod +x run_tsm_pipeline.sh
 #to run ./run_tsm_pipeline.sh 
