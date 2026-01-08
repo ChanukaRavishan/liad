@@ -5,12 +5,12 @@ from joblib import Parallel, delayed
 import math
 from argparse import ArgumentParser
 import os
-
+import math
 # ---------- CONFIG ----------
 
 # how many parallel workers to use when building profiles
 # start low (1–4), especially with 10GB files
-N_JOBS_PROFILES = 1
+N_JOBS_PROFILES = 20
 
 
 # ---------- UTILS ----------
@@ -163,6 +163,9 @@ def data_processing(df: pd.DataFrame, residents) -> pd.DataFrame:
     # Timezone handling: assume timestamps are UTC, convert to Asia/Tokyo
     df['started_at'] = pd.to_datetime(df['started_at'], utc=True).dt.tz_convert('Asia/Tokyo')
     df['finished_at'] = pd.to_datetime(df['finished_at'], utc=True).dt.tz_convert('Asia/Tokyo')
+
+    #df['started_at'] = pd.to_datetime(df['started_at']).dt.tz_localize('Asia/Tokyo')
+    #df['finished_at'] = pd.to_datetime(df['finished_at']).dt.tz_localize('Asia/Tokyo')
 
     # Split into day segments and time bins
     print("Splitting by time bins...")
@@ -399,112 +402,206 @@ def build_profiles(data: pd.DataFrame, n_jobs: int = 1) -> pd.DataFrame:
     return agent_profiles
 
 
-# ---------- MAIN SCRIPT ----------
 
+# ---------------- CONFIG ----------------
+N_PARTS = 100               # "1% by 1%" ≈ 100 partitions
+READ_CHUNKSIZE = 1_000_000  # tune based on RAM; 250k–2M typical
+N_JOBS_PROFILES = 1         # start low; parallel profiles can blow RAM
+
+PART_DIR_TRAIN = "../processed/parts_train"
+PART_DIR_TEST  = "../processed/parts_test"
+
+
+# ---------------- PARTITIONER ----------------
+def partition_csv_by_agent(
+    csv_path: str,
+    out_dir: str,
+    n_parts: int = 100,
+    chunksize: int = 1_000_000,
+    usecols=None,
+):
+    """
+    Stream-read a huge CSV and split into n_parts CSV files based on agent shard.
+    Shard rule: shard = agent % n_parts  (fast, deterministic)
+    Ensures all rows of an agent go to one shard => safe to process independently.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+
+    # remove old partitions to avoid accidentally appending to stale data
+    for p in range(n_parts):
+        part_path = os.path.join(out_dir, f"part_{p:03d}.csv")
+        if os.path.exists(part_path):
+            os.remove(part_path)
+
+    print(f"Partitioning {csv_path} into {n_parts} shards at {out_dir} ...")
+
+    reader = pd.read_csv(csv_path, chunksize=chunksize, usecols=usecols)
+
+    total_rows = 0
+    for i, chunk in enumerate(reader):
+        if "agent" not in chunk.columns:
+            raise ValueError("CSV must contain 'agent' column.")
+
+        # compute shard id
+        shard = (chunk["agent"].astype(np.int64) % n_parts).astype(np.int16)
+        chunk["_shard"] = shard
+
+        # write each shard chunk
+        for p in range(n_parts):
+            sub = chunk[chunk["_shard"] == p]
+            if sub.empty:
+                continue
+            sub = sub.drop(columns=["_shard"])
+
+            part_path = os.path.join(out_dir, f"part_{p:03d}.csv")
+            write_header = not os.path.exists(part_path)
+            sub.to_csv(part_path, mode="a", index=False, header=write_header)
+
+        total_rows += len(chunk)
+        if (i + 1) % 5 == 0:
+            print(f"  partitioned chunks: {i+1}, rows so far: {total_rows:,}")
+
+    print(f"Done partitioning. Total rows: {total_rows:,}")
+
+
+def append_df(df: pd.DataFrame, path: str):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    header = not os.path.exists(path)
+    df.to_csv(path, mode="a", index=False, header=header)
+
+
+# ---------------- MAIN ----------------
 if __name__ == "__main__":
-    train_path = '../processed/train.csv'
-    test_path = '../processed/test.csv'
-    residents_path = '../processed/residents.csv'   # cache
+    train_path = "../processed/train.csv"
+    test_path  = "../processed/test.csv"
 
-    parser = ArgumentParser(
-        description='Data Processing for LIAD (Warning: Timezone Sensitive)'
-    )
-    parser.add_argument(
-        'datatype',
-        type=int,
-        choices=[1, 2],
-        help='1 = process TRAIN, 2 = process TEST'
-    )
-
+    parser = ArgumentParser(description="Shard-by-agent processing (1% partitions) and append outputs")
+    parser.add_argument("datatype", type=int, choices=[1, 2], help="1=Train, 2=Test")
+    parser.add_argument("--repartition", action="store_true",
+                        help="Force rebuild shard files even if they exist")
     args = parser.parse_args()
 
-    # --------- Load or compute residents ---------
-    if os.path.exists(residents_path):
-        print(f"Loading cached residents from {residents_path} ...")
-        residents_df = pd.read_csv(residents_path)
-        residents = residents_df['agent'].values
-        print("Number of residents (cached):", len(residents))
+    # --- STEP 0: ensure partitions exist ---
+    if args.datatype == 1:
+        part_dir = PART_DIR_TRAIN
+        src_path = train_path
+        monthly_out = "../processed/train_monthly.csv"
+        weekly_out  = "../processed/train_weekly.csv"
     else:
-        print("Reading train CSV to compute residents...")
-        train_df_for_residents = pd.read_csv(train_path)
-        print("Train shape (for residents):", train_df_for_residents.shape)
+        part_dir = PART_DIR_TEST
+        src_path = test_path
+        monthly_out = "../processed/test_monthly.csv"
+        weekly_out  = "../processed/test_weekly.csv"
 
-        print("Selecting residents from train...")
-        residents = agent_type_filter(train_df_for_residents)
-        print("Number of residents:", len(residents))
+    need_partition = args.repartition or (not os.path.exists(part_dir)) or (
+        len([f for f in os.listdir(part_dir) if f.startswith("part_") and f.endswith(".csv")]) < N_PARTS
+    )
 
-        # cache to disk so test runs don't need to re-read 10GB train
-        residents_df = pd.DataFrame({'agent': residents})
-        residents_df.to_csv(residents_path, index=False)
-        print(f"Residents cached to {residents_path}")
+    if need_partition:
+        # IMPORTANT: include only columns you actually need to reduce IO and RAM
+        # Add/remove based on your pipeline requirements.
+        needed_cols = [
+            "agent", "started_at", "finished_at", "location_id",
+            "latitude", "longitude", "poi_category"
+        ]
+        partition_csv_by_agent(
+            csv_path=src_path,
+            out_dir=part_dir,
+            n_parts=N_PARTS,
+            chunksize=READ_CHUNKSIZE,
+            usecols=None,  # set to needed_cols if your CSV has exactly these; else keep None
+        )
+    else:
+        print(f"Using existing partitions in {part_dir}")
 
-        # free memory
-        del train_df_for_residents
+    # --- STEP 1: get residents (computed from TRAIN only) ---
+    # You must define residents consistently (same filter) for both train & test runs.
+    residents_cache = "../processed/residents.csv"
+    if os.path.exists(residents_cache):
+        residents = pd.read_csv(residents_cache)["agent"].values
+        print("Loaded residents:", len(residents))
+    else:
+        # Compute residents by streaming TRAIN partitions (cheaper than reading full 10GB again if already partitioned)
+        print("Computing residents from TRAIN partitions...")
+        dur_sum = {}  # agent -> total_duration_minutes
 
-    # --------- Helper: weekly profiles ---------
-    def build_weekly_profiles(df, monthly_profiles_path, weekly_profiles_path, label: str):
-        """
-        df: already processed (data_processing), with started_at tz-aware
-        """
-        # monthly
-        print(f"Building {label} monthly profiles...")
-        month_profiles = build_profiles(df, n_jobs=N_JOBS_PROFILES)
-        month_profiles.to_csv(monthly_profiles_path, index=False)
-        print(f"Saved {label} monthly profiles to {monthly_profiles_path}")
+        # We'll compute durations from TRAIN shards only
+        if not os.path.exists(PART_DIR_TRAIN):
+            raise RuntimeError("Train partitions not found; run train partitioning first or set --repartition on train.")
 
-        # weekly
-        print(f"Building {label} weekly profiles...")
-        df['week'] = df['started_at'].dt.to_period('W').astype(str)
+        for p in range(N_PARTS):
+            part_path = os.path.join(PART_DIR_TRAIN, f"part_{p:03d}.csv")
+            if not os.path.exists(part_path):
+                continue
+
+            # stream this partition file too (it might still be large)
+            for chunk in pd.read_csv(part_path, chunksize=READ_CHUNKSIZE, usecols=["agent", "started_at", "finished_at"]):
+                chunk["started_at"] = pd.to_datetime(chunk["started_at"])
+                chunk["finished_at"] = pd.to_datetime(chunk["finished_at"])
+                dur = (chunk["finished_at"] - chunk["started_at"]).dt.total_seconds() / 60.0
+                dur = dur.clip(lower=0).fillna(0)
+
+                g = dur.groupby(chunk["agent"]).sum()
+                for a, v in g.items():
+                    dur_sum[a] = dur_sum.get(a, 0.0) + float(v)
+
+            print(f"  residents pass: partition {p:03d} done")
+
+        dur_series = pd.Series(dur_sum, name="train_duration")
+        q = dur_series.quantile(0.16)
+        residents = dur_series[dur_series >= q].index.values
+
+        pd.DataFrame({"agent": residents}).to_csv(residents_cache, index=False)
+        print("Residents computed + cached:", len(residents))
+
+    residents_set = set(residents.tolist())
+
+    # --- STEP 2: wipe outputs (we are appending; ensure fresh run) ---
+    for out in [monthly_out, weekly_out]:
+        if os.path.exists(out):
+            os.remove(out)
+            print(f"Removed existing output: {out}")
+
+    # --- STEP 3: process partitions 0..99, append monthly & weekly ---
+    print("Processing partitions and appending outputs...")
+
+    for p in range(N_PARTS):
+        part_path = os.path.join(part_dir, f"part_{p:03d}.csv")
+        if not os.path.exists(part_path):
+            continue
+
+        print(f"\n=== Partition {p:03d} ===")
+
+        # Load entire shard into memory (since it's ~1% of data)
+        df = pd.read_csv(part_path)
+
+        # filter to residents
+        df = df[df["agent"].isin(residents_set)]
+        if df.empty:
+            print("  shard empty after residents filter; skipping")
+            continue
+
+        # Run your heavy pipeline on this shard
+        processed = data_processing(df, residents)   # your optimized data_processing (df input)
+        # monthly profiles
+        monthly_profiles = build_profiles(processed, n_jobs=N_JOBS_PROFILES)
+
+        # weekly profiles
+        processed["week"] = processed["started_at"].dt.to_period("W").astype(str)
         weekly_list = []
         i = 0
-        for wk, chunk in df.groupby('week'):
-            print(f"  Processing {label} week: {wk}, rows: {len(chunk)}")
+        for wk, chunk in processed.groupby("week"):
             prof = build_profiles(chunk, n_jobs=N_JOBS_PROFILES)
-            prof['chunk'] = i
+            prof["chunk"] = i
             weekly_list.append(prof)
             i += 1
         weekly_profiles = pd.concat(weekly_list, ignore_index=True)
-        weekly_profiles.to_csv(weekly_profiles_path, index=False)
-        print(f"Saved {label} weekly profiles to {weekly_profiles_path}")
 
-    # --------- Branch: train / test ---------
+        # Append to final CSVs (safe because agents do not overlap across partitions)
+        append_df(monthly_profiles, monthly_out)
+        append_df(weekly_profiles, weekly_out)
 
-    if args.datatype == 1:
-        # TRAIN
-        print("Reading full TRAIN CSV...")
-        train_df = pd.read_csv(train_path)
-        print("Train shape:", train_df.shape)
+        # free memory aggressively
+        del df, processed, monthly_profiles, weekly_profiles
 
-        print("Running data_processing on TRAIN...")
-        train_data = data_processing(train_df, residents)
-        del train_df   # free raw
-
-        build_weekly_profiles(
-            df=train_data,
-            monthly_profiles_path='../processed/train_monthly.csv',
-            weekly_profiles_path='../processed/train_weekly.csv',
-            label='TRAIN'
-        )
-
-        del train_data
-        print("TRAIN processing complete.")
-
-    elif args.datatype == 2:
-        # TEST
-        print("Reading full TEST CSV...")
-        test_df = pd.read_csv(test_path)
-        print("Test shape:", test_df.shape)
-
-        print("Running data_processing on TEST...")
-        test_data = data_processing(test_df, residents)
-        del test_df   # free raw
-
-        build_weekly_profiles(
-            df=test_data,
-            monthly_profiles_path='../processed/test_monthly.csv',
-            weekly_profiles_path='../processed/test_weekly.csv',
-            label='TEST'
-        )
-
-        del test_data
-        print("TEST processing complete.")
+    print("\nAll partitions processed. Done.")
