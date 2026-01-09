@@ -9,8 +9,7 @@ import math
 # ---------- CONFIG ----------
 
 # how many parallel workers to use when building profiles
-# start low (1–4), especially with 10GB files
-N_JOBS_PROFILES = 20
+N_JOBS_PROFILES = 40
 
 
 # ---------- UTILS ----------
@@ -60,7 +59,7 @@ def assign_time_segment(dt):
 def agent_type_filter(train_df: pd.DataFrame):
     """
     Compute total duration per agent on the train month and keep agents
-    above the 16th percentile (like your original).
+    above the 16th percentile (this needs to be customized depending on the data).
     Works on an in-memory DataFrame (no extra csv read).
     """
     tmp = train_df[['agent', 'started_at', 'finished_at']].copy()
@@ -160,12 +159,20 @@ def data_processing(df: pd.DataFrame, residents) -> pd.DataFrame:
     df = df[df['agent'].isin(residents)].copy()
     print("After resident filter:", df.shape)
 
-    # Timezone handling: assume timestamps are UTC, convert to Asia/Tokyo
+    # Timezone handling: we assume the timestamps are UTC, then we convert to Asia/Tokyo
     df['started_at'] = pd.to_datetime(df['started_at'], utc=True).dt.tz_convert('Asia/Tokyo')
     df['finished_at'] = pd.to_datetime(df['finished_at'], utc=True).dt.tz_convert('Asia/Tokyo')
 
-    #df['started_at'] = pd.to_datetime(df['started_at']).dt.tz_localize('Asia/Tokyo')
-    #df['finished_at'] = pd.to_datetime(df['finished_at']).dt.tz_localize('Asia/Tokyo')
+    '''
+    Warning: This approach is highly Timezone sensitive, we assume the data you provide are UTC, then we convert to
+    Asia/Tokyo.
+
+    Below is couple of lines, for you to refer if your data are already in Asia/Tokyo
+    timezone and you just want to localize it.
+
+    df['started_at'] = pd.to_datetime(df['started_at']).dt.tz_localize('Asia/Tokyo')
+    df['finished_at'] = pd.to_datetime(df['finished_at']).dt.tz_localize('Asia/Tokyo')
+    '''
 
     # Split into day segments and time bins
     print("Splitting by time bins...")
@@ -176,7 +183,7 @@ def data_processing(df: pd.DataFrame, residents) -> pd.DataFrame:
     df['duration_min'] = (df['finished_at'] - df['started_at']).dt.total_seconds() / 60.0
     df['duration'] = df['duration_min'].clip(lower=0).fillna(0)
 
-    # Find home per agent as location with max total duration
+    # Find home per agent
     print("Computing homes...")
     dur = df.groupby(['agent', 'location_id'])['duration'].sum()
     homes = dur.groupby('agent').idxmax()
@@ -220,10 +227,8 @@ def data_processing(df: pd.DataFrame, residents) -> pd.DataFrame:
     df['day_of_week'] = df['started_at'].dt.dayofweek
     df['day_type'] = df['day_of_week'].apply(lambda x: 'weekend' if x >= 5 else 'weekday')
 
-    # Sort
     df = df.sort_values(['agent', 'started_at']).reset_index(drop=True)
 
-    # Compute speeds between staypoints, vectorized
     print("Computing speeds...")
     df = compute_speeds_vectorized(df)
     print("Speed computation completed.")
@@ -281,7 +286,7 @@ def compute_speeds_vectorized(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-# ---------- BUILD PROFILES (OPTIONALLY PARALLEL) ----------
+# ---------- BUILD PROFILES ----------
 
 def _build_profiles_single_chunk(chunk_df: pd.DataFrame):
     """
@@ -406,7 +411,7 @@ def build_profiles(data: pd.DataFrame, n_jobs: int = 1) -> pd.DataFrame:
 # ---------------- CONFIG ----------------
 N_PARTS = 100               # "1% by 1%" ≈ 100 partitions
 READ_CHUNKSIZE = 1_000_000  # tune based on RAM; 250k–2M typical
-N_JOBS_PROFILES = 1         # start low; parallel profiles can blow RAM
+N_JOBS_PROFILES = 1         # adjust based on your CPU cores
 
 PART_DIR_TRAIN = "../processed/parts_train"
 PART_DIR_TEST  = "../processed/parts_test"
@@ -498,8 +503,7 @@ if __name__ == "__main__":
     )
 
     if need_partition:
-        # IMPORTANT: include only columns you actually need to reduce IO and RAM
-        # Add/remove based on your pipeline requirements.
+
         needed_cols = [
             "agent", "started_at", "finished_at", "location_id",
             "latitude", "longitude", "poi_category"
@@ -509,13 +513,12 @@ if __name__ == "__main__":
             out_dir=part_dir,
             n_parts=N_PARTS,
             chunksize=READ_CHUNKSIZE,
-            usecols=None,  # set to needed_cols if your CSV has exactly these; else keep None
+            usecols=None,
         )
     else:
         print(f"Using existing partitions in {part_dir}")
 
     # --- STEP 1: get residents (computed from TRAIN only) ---
-    # You must define residents consistently (same filter) for both train & test runs.
     residents_cache = "../processed/residents.csv"
     if os.path.exists(residents_cache):
         residents = pd.read_csv(residents_cache)["agent"].values
@@ -556,7 +559,7 @@ if __name__ == "__main__":
 
     residents_set = set(residents.tolist())
 
-    # --- STEP 2: wipe outputs (we are appending; ensure fresh run) ---
+    # --- STEP 2: wipe outputs
     for out in [monthly_out, weekly_out]:
         if os.path.exists(out):
             os.remove(out)
@@ -581,27 +584,27 @@ if __name__ == "__main__":
             print("  shard empty after residents filter; skipping")
             continue
 
-        # Run your heavy pipeline on this shard
-        processed = data_processing(df, residents)   # your optimized data_processing (df input)
+
+        processed = data_processing(df, residents)
         # monthly profiles
         monthly_profiles = build_profiles(processed, n_jobs=N_JOBS_PROFILES)
 
-        # weekly profiles
-        processed["week"] = processed["started_at"].dt.to_period("W").astype(str)
-        weekly_list = []
-        i = 0
-        for wk, chunk in processed.groupby("week"):
-            prof = build_profiles(chunk, n_jobs=N_JOBS_PROFILES)
-            prof["chunk"] = i
-            weekly_list.append(prof)
-            i += 1
-        weekly_profiles = pd.concat(weekly_list, ignore_index=True)
+        # # weekly profiles
+        # processed["week"] = processed["started_at"].dt.to_period("W").astype(str)
+        # weekly_list = []
+        # i = 0
+        # for wk, chunk in processed.groupby("week"):
+        #     prof = build_profiles(chunk, n_jobs=N_JOBS_PROFILES)
+        #     prof["chunk"] = i
+        #     weekly_list.append(prof)
+        #     i += 1
+        # weekly_profiles = pd.concat(weekly_list, ignore_index=True)
 
         # Append to final CSVs (safe because agents do not overlap across partitions)
         append_df(monthly_profiles, monthly_out)
-        append_df(weekly_profiles, weekly_out)
+        #append_df(weekly_profiles, weekly_out)
 
         # free memory aggressively
-        del df, processed, monthly_profiles, weekly_profiles
+        del df, processed, monthly_profiles#, weekly_profiles
 
     print("\nAll partitions processed. Done.")
