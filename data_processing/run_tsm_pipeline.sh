@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
-ß
 PYTHON=python3
 SCRIPT="tsm.py"
 
@@ -24,9 +23,9 @@ echo
 echo ">>> TRAIN completed successfully."
 echo
 
-echo ">>> Running TEST phase..."
-echo "Logging to: $TEST_LOG"
-$PYTHON "$SCRIPT" 2 | tee "$TEST_LOG"
+#echo ">>> Running TEST phase..."
+#echo "Logging to: $TEST_LOG"
+#$PYTHON "$SCRIPT" 2 | tee "$TEST_LOG"
 
 echo
 echo "=============================="
