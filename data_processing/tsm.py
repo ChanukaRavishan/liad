@@ -192,7 +192,7 @@ def data_processing(df: pd.DataFrame, residents) -> pd.DataFrame:
     homes_df = homes.reset_index()
     homes_df.columns = ['agent', 'home_location_id']
 
-    # Unique coords per (agent, location_id)
+
     home_coords_unique = (
         df.groupby(['agent', 'location_id'], as_index=False)
           .agg(
@@ -222,7 +222,6 @@ def data_processing(df: pd.DataFrame, residents) -> pd.DataFrame:
         df['home_longitude'].to_numpy()
     )
 
-    # Time segment, day type
     df['time_segment'] = df['started_at'].apply(assign_time_segment)
     df['day_of_week'] = df['started_at'].dt.dayofweek
     df['day_type'] = df['day_of_week'].apply(lambda x: 'weekend' if x >= 5 else 'weekday')
@@ -256,10 +255,9 @@ def compute_speeds_vectorized(df: pd.DataFrame) -> pd.DataFrame:
     same_segment = df['time_segment'] == df['prev_time_segment']
     valid = same_segment & df['prev_lat'].notna()
 
-    # init arrays
     n = len(df)
     dist = np.zeros(n, dtype='float64')
-    dt_hours = np.ones(n, dtype='float64')  # avoid div by zero default
+    dt_hours = np.ones(n, dtype='float64')
 
     idx = np.where(valid)[0]
 
@@ -410,8 +408,8 @@ def build_profiles(data: pd.DataFrame, n_jobs: int = 1) -> pd.DataFrame:
 
 # ---------------- CONFIG ----------------
 N_PARTS = 100               # "1% by 1%" ≈ 100 partitions
-READ_CHUNKSIZE = 1_000_000  # tune based on RAM; 250k–2M typical
-N_JOBS_PROFILES = 1         # adjust based on your CPU cores
+READ_CHUNKSIZE = 1_000_000 
+N_JOBS_PROFILES = 1         # adjust based on CPU cores
 
 PART_DIR_TRAIN = "../processed/parts_train"
 PART_DIR_TEST  = "../processed/parts_test"
@@ -432,7 +430,7 @@ def partition_csv_by_agent(
     """
     os.makedirs(out_dir, exist_ok=True)
 
-    # remove old partitions to avoid accidentally appending to stale data
+
     for p in range(n_parts):
         part_path = os.path.join(out_dir, f"part_{p:03d}.csv")
         if os.path.exists(part_path):
