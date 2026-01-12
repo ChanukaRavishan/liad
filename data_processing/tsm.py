@@ -586,25 +586,26 @@ if __name__ == "__main__":
 
 
         processed = data_processing(df, residents)
+        
         # monthly profiles
-        monthly_profiles = build_profiles(processed, n_jobs=N_JOBS_PROFILES)
+        #monthly_profiles = build_profiles(processed, n_jobs=N_JOBS_PROFILES)
 
-        # # weekly profiles
-        # processed["week"] = processed["started_at"].dt.to_period("W").astype(str)
-        # weekly_list = []
-        # i = 0
-        # for wk, chunk in processed.groupby("week"):
-        #     prof = build_profiles(chunk, n_jobs=N_JOBS_PROFILES)
-        #     prof["chunk"] = i
-        #     weekly_list.append(prof)
-        #     i += 1
-        # weekly_profiles = pd.concat(weekly_list, ignore_index=True)
+        # weekly profiles
+        processed["week"] = processed["started_at"].dt.to_period("W").astype(str)
+        weekly_list = []
+        i = 0
+        for wk, chunk in processed.groupby("week"):
+            prof = build_profiles(chunk, n_jobs=N_JOBS_PROFILES)
+            prof["chunk"] = i
+            weekly_list.append(prof)
+            i += 1
+        weekly_profiles = pd.concat(weekly_list, ignore_index=True)
 
-        # Append to final CSVs (safe because agents do not overlap across partitions)
-        append_df(monthly_profiles, monthly_out)
-        #append_df(weekly_profiles, weekly_out)
+        #Append to final CSVs (safe because agents do not overlap across partitions)
+        #append_df(monthly_profiles, monthly_out)
+        append_df(weekly_profiles, weekly_out)
 
         # free memory aggressively
-        del df, processed, monthly_profiles#, weekly_profiles
+        del df, processed, weekly_profiles #monthly_profiles#, weekly_profiles
 
     print("\nAll partitions processed. Done.")
