@@ -13,13 +13,25 @@ def parse_maybe_list(x):
     """
     Safely parse list-like values that may be stored as strings in CSV.
     Returns a Python list.
+    Handles: NaN/None, list, tuple, set, np.ndarray, strings like "[1,2]".
     """
-    if pd.isna(x):
+    # Fast path for common nulls
+    if x is None:
         return []
+
+    # If it's already list-like, return it as a list
     if isinstance(x, list):
         return x
     if isinstance(x, (set, tuple)):
         return list(x)
+    if isinstance(x, np.ndarray):
+        return x.tolist()
+
+    # Handle scalar NaN (only safe for scalars)
+    if isinstance(x, (float, np.floating)) and np.isnan(x):
+        return []
+
+    # Strings: try literal_eval
     if isinstance(x, str):
         s = x.strip()
         if s == "" or s.lower() in ("nan", "none", "null"):
@@ -28,13 +40,24 @@ def parse_maybe_list(x):
             v = ast.literal_eval(s)
             if isinstance(v, (list, set, tuple)):
                 return list(v)
-            # if it parses to dict, return keys by default? (adjust if needed)
+            if isinstance(v, np.ndarray):
+                return v.tolist()
             if isinstance(v, dict):
+                # choose keys (adjust if you want values instead)
                 return list(v.keys())
             return []
         except Exception:
             return []
+
+    # For anything else, try a safe pandas scalar-null check
+    try:
+        if pd.isna(x):
+            return []
+    except Exception:
+        pass
+
     return []
+
 
 
 def ensure_columns_exist(df, cols, fill_value=np.nan):
