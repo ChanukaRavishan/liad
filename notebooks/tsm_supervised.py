@@ -1,25 +1,102 @@
-import pandas as pd
-import numpy as np
-from math import radians, sin, cos, sqrt, atan2
-from joblib import Parallel, delayed
-import math
 import os
+import ast
+import numpy as np
+import pandas as pd
+
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 
-def build_anomaly_features(train_profiles, test_profiles):
-    # Merge train/test profiles (don't filter by agent here; keep everything)
+
+
+def parse_maybe_list(x):
+    """
+    Safely parse list-like values that may be stored as strings in CSV.
+    Returns a Python list.
+    """
+    if pd.isna(x):
+        return []
+    if isinstance(x, list):
+        return x
+    if isinstance(x, (set, tuple)):
+        return list(x)
+    if isinstance(x, str):
+        s = x.strip()
+        if s == "" or s.lower() in ("nan", "none", "null"):
+            return []
+        try:
+            v = ast.literal_eval(s)
+            if isinstance(v, (list, set, tuple)):
+                return list(v)
+            # if it parses to dict, return keys by default? (adjust if needed)
+            if isinstance(v, dict):
+                return list(v.keys())
+            return []
+        except Exception:
+            return []
+    return []
+
+
+def ensure_columns_exist(df, cols, fill_value=np.nan):
+    for c in cols:
+        if c not in df.columns:
+            df[c] = fill_value
+    return df
+
+
+def build_anomaly_features(train_profiles: pd.DataFrame, test_profiles: pd.DataFrame) -> pd.DataFrame:
+    """
+    Build per-row anomaly features by comparing test slot vs train slot
+    for the SAME agent + day_type + time_segment.
+
+    Prevents many-to-many merges by aggregating to unique keys first.
+    """
+    keys = ['agent', 'day_type', 'time_segment']
+
+    base_numeric = [
+        'unique_location_ids',
+        'avg_distance_from_home_km',
+        'avg_speed_kmh',
+        'max_stay_duration',
+        'transformations',
+        'max_distance_from_home',
+        'label'
+    ]
+    base_misc = ['unique_locs', 'poi_dict', 'dominent_poi']
+
+    train_profiles = ensure_columns_exist(train_profiles.copy(), base_numeric + base_misc)
+    test_profiles  = ensure_columns_exist(test_profiles.copy(),  base_numeric + base_misc)
+
+    # Aggregate to ensure 1 row per key in each split
+    agg_num = {
+        'unique_location_ids': 'mean',
+        'avg_distance_from_home_km': 'mean',
+        'avg_speed_kmh': 'mean',
+        'max_stay_duration': 'max',
+        'transformations': 'mean',
+        'max_distance_from_home': 'max',
+        'label': 'max'
+    }
+    # For list-like / categorical fields: take first non-null occurrence
+    agg_misc = {
+        'unique_locs': 'first',
+        'poi_dict': 'first',
+        'dominent_poi': 'first'
+    }
+
+    train_agg = train_profiles.groupby(keys, as_index=False).agg({**agg_num, **agg_misc})
+    test_agg  = test_profiles.groupby(keys, as_index=False).agg({**agg_num, **agg_misc})
+
+    # Merge on agent+slot (THE actual intended join)
     merged = pd.merge(
-        test_profiles,
-        train_profiles,
-        on=['day_type', 'time_segment'],
+        test_agg,
+        train_agg,
+        on=keys,
         suffixes=('_test', '_train'),
         how='left'
     )
 
-    # Fill numeric training columns when no history exists
-    numeric_cols = [
+    numeric_train_cols = [
         'unique_location_ids_train',
         'avg_distance_from_home_km_train',
         'avg_speed_kmh_train',
@@ -27,66 +104,50 @@ def build_anomaly_features(train_profiles, test_profiles):
         'transformations_train',
         'max_distance_from_home_train'
     ]
-    merged[numeric_cols] = merged[numeric_cols].fillna(0)
+    for c in numeric_train_cols:
+        if c not in merged.columns:
+            merged[c] = 0.0
+    merged[numeric_train_cols] = merged[numeric_train_cols].fillna(0)
 
-    # Component 1: Count difference
-    merged['f_count_diff'] = (merged['unique_location_ids_test'] -
-                              merged['unique_location_ids_train']).abs()
 
-    # Component 2: Distance difference
-    merged['f_dist_diff'] = (merged['avg_distance_from_home_km_test'] -
-                             merged['avg_distance_from_home_km_train']).abs()
+    for c in ['unique_locs_train', 'unique_locs_test', 'poi_dict_train', 'poi_dict_test']:
+        if c not in merged.columns:
+            merged[c] = [[]] * len(merged)
+        merged[c] = merged[c].apply(parse_maybe_list)
 
-    # Component 3: Speed difference
-    merged['f_speed_diff'] = (merged['avg_speed_kmh_test'] -
-                              merged['avg_speed_kmh_train']).abs()
+    merged['f_count_diff'] = (merged['unique_location_ids_test'] - merged['unique_location_ids_train']).abs()
+    merged['f_dist_diff']  = (merged['avg_distance_from_home_km_test'] - merged['avg_distance_from_home_km_train']).abs()
+    merged['f_speed_diff'] = (merged['avg_speed_kmh_test'] - merged['avg_speed_kmh_train']).abs()
 
-    # Component 4: New locations
     def get_new_loc_count(row):
-        locs_train = row['unique_locs_train']
-        locs_test = row['unique_locs_test']
-        set_train = set(locs_train) if isinstance(locs_train, list) else set()
-        set_test = set(locs_test) if isinstance(locs_test, list) else set()
+        set_train = set(row['unique_locs_train']) if isinstance(row['unique_locs_train'], list) else set()
+        set_test  = set(row['unique_locs_test'])  if isinstance(row['unique_locs_test'], list)  else set()
         return len(set_test - set_train)
 
     merged['f_new_locs'] = merged.apply(get_new_loc_count, axis=1)
 
-    # Component 5: max stay duration
-    merged['f_max_stay_diff'] = (
-        merged['max_stay_duration_test'] -
-        merged['max_stay_duration_train']
-    ).abs()
+    merged['f_max_stay_diff'] = (merged['max_stay_duration_test'] - merged['max_stay_duration_train']).abs()
+    merged['f_transforms_diff'] = (merged['transformations_test'] - merged['transformations_train']).abs()
+    merged['f_max_dist_diff'] = (merged['max_distance_from_home_test'] - merged['max_distance_from_home_train']).abs()
 
-    # Component 6: number of transformations
-    merged['f_transforms_diff'] = (
-        merged['transformations_test'] -
-        merged['transformations_train']
-    ).abs()
+    if 'dominent_poi_test' not in merged.columns:
+        merged['dominent_poi_test'] = np.nan
+    if 'dominent_poi_train' not in merged.columns:
+        merged['dominent_poi_train'] = np.nan
 
-    # Component 7: max distance from home
-    merged['f_max_dist_diff'] = (
-        merged['max_distance_from_home_test'] -
-        merged['max_distance_from_home_train']
-    ).abs()
+    merged['f_dom_poi_changed'] = (merged['dominent_poi_test'] != merged['dominent_poi_train']).astype(int)
 
-    # Component 8: dominant poi changed
-    merged['f_dom_poi_changed'] = (
-        merged['dominent_poi_test'] != merged['dominent_poi_train']
-    ).astype(int)
-
-    # Component 9: new POI categories
     def get_new_poi_count(row):
-        pois_train = row['poi_dict_train']
-        pois_test = row['poi_dict_test']
-        set_train = set(pois_train) if isinstance(pois_train, list) else set()
-        set_test = set(pois_test) if isinstance(pois_test, list) else set()
+        set_train = set(row['poi_dict_train']) if isinstance(row['poi_dict_train'], list) else set()
+        set_test  = set(row['poi_dict_test'])  if isinstance(row['poi_dict_test'], list)  else set()
         return len(set_test - set_train)
 
     merged['f_new_pois'] = merged.apply(get_new_poi_count, axis=1)
 
     return merged
 
-def fit_anomaly_weight_model(train_profiles, test_profiles):
+
+def fit_anomaly_weight_model(train_profiles: pd.DataFrame, test_profiles: pd.DataFrame):
     merged = build_anomaly_features(train_profiles, test_profiles)
 
     feature_cols = [
@@ -102,13 +163,14 @@ def fit_anomaly_weight_model(train_profiles, test_profiles):
     ]
 
     X = merged[feature_cols]
-    y = merged['label_test']  # 0/1 anomalous row
+    y = merged['label_test']  # 0/1 anomalous row in test
 
     model = Pipeline([
         ('scaler', StandardScaler()),
         ('clf', LogisticRegression(
-            class_weight='balanced',  # you likely have few anomalies
-            max_iter=1000
+            class_weight='balanced',
+            max_iter=1000,
+            n_jobs=1
         ))
     ])
 
@@ -116,103 +178,75 @@ def fit_anomaly_weight_model(train_profiles, test_profiles):
     return model, feature_cols
 
 
+def main():
+    os.environ["OMP_NUM_THREADS"] = "1"
+    os.environ["MKL_NUM_THREADS"] = "1"
+    os.environ["OPENBLAS_NUM_THREADS"] = "1"
+    os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
-os.environ["OPENBLAS_NUM_THREADS"] = "1"
-os.environ["NUMEXPR_NUM_THREADS"] = "1"
+    train = pd.read_csv('../processed/train_monthly.csv')
+    test  = pd.read_csv('../processed/test_monthly.csv')
 
-train = pd.read_csv('../processed/train_monthly.csv')
-test = pd.read_csv('../processed/test_monthly.csv')
+    gt = pd.read_csv('../processed/anomalous_segmented.csv')
+    residents = pd.read_csv('../processed/residents.csv')
 
-gt = pd.read_csv('../processed/anomalous_segmented.csv')
-residents = pd.read_csv('../processed/residents.csv')
-train = train[train.agent.isin(residents.agent.unique())]
+    train = train[train['agent'].isin(residents['agent'].unique())].copy()
 
-train['label'] = 0
-test['label'] = 0
+    train['label'] = 0
+    test['label'] = 0
 
-gt_agents = set(gt['agent'].unique())
-train_agents = set(train['agent'].unique())
-normal_agents = np.array(list(train_agents - gt_agents))
+    gt_agents = set(gt['agent'].unique())
+    train_agents = set(train['agent'].unique())
+    normal_agents = np.array(list(train_agents - gt_agents))
 
-print("GT agents:", len(gt_agents))
-print("Available normal agents:", len(normal_agents))
-np.random.seed(42)
-sampled_normals = np.random.choice(normal_agents, size=100000, replace=False)
+    print("GT agents:", len(gt_agents))
+    print("Available normal agents:", len(normal_agents))
 
-train = pd.concat([
-    train[train['agent'].isin(gt_agents)],          # anomalous agents
-    train[train['agent'].isin(sampled_normals)]     # clean agents
-]).reset_index(drop=True)
+    np.random.seed(42)
+    sample_size = 100000
+    if len(normal_agents) < sample_size:
+        raise ValueError(f"Not enough normal agents to sample {sample_size}. Only {len(normal_agents)} available.")
 
-test = test[test.agent.isin(train.agent.unique())]
+    sampled_normals = np.random.choice(normal_agents, size=sample_size, replace=False)
 
+    train = pd.concat([
+        train[train['agent'].isin(gt_agents)],
+        train[train['agent'].isin(sampled_normals)]
+    ], ignore_index=True)
 
-for agent, gt_agent in gt.groupby('agent'):
-    agent_mask = test['agent'] == agent
+    test = test[test['agent'].isin(train['agent'].unique())].copy()
 
-    if not agent_mask.any():
-        continue
+    gt_keys = set(zip(gt['agent'], gt['day_type'], gt['time_segment']))
+    test_keys = list(zip(test['agent'], test['day_type'], test['time_segment']))
+    test['label'] = np.fromiter((k in gt_keys for k in test_keys), dtype=np.int8, count=len(test))
 
-    for _, row in gt_agent.iterrows():
-        anomaly_time_segment = row['time_segment']
-        anomaly_day_type = row['day_type']
-
-        overlap_mask = (
-            agent_mask &
-            (test['day_type'] == anomaly_day_type) &
-            (test['time_segment'] == anomaly_time_segment)
-        )
-
-        test.loc[overlap_mask, 'label'] = 1
+    for col in ['unique_locs', 'poi_dict']:
+        if col in train.columns:
+            train[col] = train[col].apply(parse_maybe_list)
+        if col in test.columns:
+            test[col] = test[col].apply(parse_maybe_list)
 
 
-def fit_anomaly_weight_model(train_profiles, test_profiles):
-    merged = build_anomaly_features(train_profiles, test_profiles)
+    print('fitting the model')
+    model, feature_cols = fit_anomaly_weight_model(train, test)
 
-    feature_cols = [
-        'f_count_diff',
-        'f_dist_diff',
-        'f_speed_diff',
-        'f_new_locs',
-        'f_max_stay_diff',
-        'f_transforms_diff',
-        'f_max_dist_diff',
-        'f_dom_poi_changed',
-        'f_new_pois',
-    ]
+    clf = model.named_steps['clf']
+    weights = clf.coef_[0]
 
-    X = merged[feature_cols]
-    y = merged['label_test']  # 0/1 anomalous row
+    # print weights
+    for name, w in zip(feature_cols, weights):
+        print(name, w)
 
-    model = Pipeline([
-        ('scaler', StandardScaler()),
-        ('clf', LogisticRegression(
-            class_weight='balanced',  # you likely have few anomalies
-            max_iter=1000
-        ))
-    ])
+    # save weights
+    weights_df = pd.DataFrame({
+        "feature": feature_cols,
+        "weight": weights
+    }).sort_values("weight", key=abs, ascending=False)
 
-    model.fit(X, y)
-    return model, feature_cols
+    out_path = "sim2_evalb_model_weights.csv"
+    weights_df.to_csv(out_path, index=False)
+    print(f"\nSaved weights to: {out_path}")
 
 
-model, feature_cols = fit_anomaly_weight_model(train, test)
-scaler = model.named_steps['scaler']
-clf = model.named_steps['clf']
-
-weights = clf.coef_[0]
-for name, w in zip(feature_cols, weights):
-    print(name, w)
-
-
-
-weights_df = pd.DataFrame({
-    "feature": feature_cols,
-    "weight": weights
-})
-
-weights_df = weights_df.sort_values("weight", key=abs, ascending=False)
-
-weights_df.to_csv("sim2_evalb_model_weights.csv", index=False)
+if __name__ == "__main__":
+    main()
