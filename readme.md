@@ -64,6 +64,40 @@ Each file must contain the following columns:
 
 > **Important**  
 > LIAD assumes all timestamps are in **UTC**. They are internally converted to **Asia/Tokyo** during preprocessing.
+> If consecutive rows in the train / test files for an agent X are the same location please merge the rows in to a single row. You can refer to the function 
+
+```python
+def merge_consecutive_locations()
+```
+in the notebooks/ LIAD_ready_data.ipynb on how to do the correct transformation of data.
+
+> This Pipeline works for the residents in the simulation, please customize below function in data_processing/tsm.py file in accordance with the dataset you use
+
+```python
+
+def agent_type_filter(train_df: pd.DataFrame):
+    """
+    Compute total duration per agent on the train month and keep agents who satisfy the required amount of hours in the simulation
+    Works on an in-memory DataFrame (no extra csv read).
+    """
+    tmp = train_df[['agent', 'started_at', 'finished_at']].copy()
+
+    tmp['started_at'] = pd.to_datetime(tmp['started_at'])
+    tmp['finished_at'] = pd.to_datetime(tmp['finished_at'])
+
+    tmp['duration_min'] = (tmp['finished_at'] - tmp['started_at']).dt.total_seconds() / 60.0
+    tmp['duration'] = tmp['duration_min'].clip(lower=0).fillna(0)
+
+    train_agent_dur = tmp.groupby('agent')['duration'].sum()
+
+    df = pd.DataFrame({'train_duration': train_agent_dur}).fillna(0)
+
+    q1_value = df['train_duration'].quantile(0.16)
+    df_top_q1 = df[df['train_duration'] >= q1_value]
+
+    return df_top_q1.index
+
+```
 
 ---
 
