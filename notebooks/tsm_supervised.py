@@ -207,38 +207,8 @@ def main():
     os.environ["OPENBLAS_NUM_THREADS"] = "1"
     os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
-    train = pd.read_csv('../processed/train_monthly.csv')
-    test  = pd.read_csv('../processed/test_monthly.csv')
-
-    gt = pd.read_csv('../processed/anomalous_segmented.csv')
-
-    train['label'] = 0
-    test['label'] = 0
-
-    gt_agents = set(gt['agent'].unique())
-    train_agents = set(train['agent'].unique())
-    normal_agents = np.array(list(train_agents - gt_agents))
-
-    print("GT agents:", len(gt_agents))
-    print("Available normal agents:", len(normal_agents))
-
-    np.random.seed(42)
-    sample_size = 100000
-    if len(normal_agents) < sample_size:
-        raise ValueError(f"Not enough normal agents to sample {sample_size}. Only {len(normal_agents)} available.")
-
-    sampled_normals = np.random.choice(normal_agents, size=sample_size, replace=False)
-
-    train = pd.concat([
-        train[train['agent'].isin(gt_agents)],
-        train[train['agent'].isin(sampled_normals)]
-    ], ignore_index=True)
-
-    test = test[test['agent'].isin(train['agent'].unique())].copy()
-
-    gt_keys = set(zip(gt['agent'], gt['day_type'], gt['time_segment']))
-    test_keys = list(zip(test['agent'], test['day_type'], test['time_segment']))
-    test['label'] = np.fromiter((k in gt_keys for k in test_keys), dtype=np.int8, count=len(test))
+    train = pd.read_csv('../processed/trial5/train_monthly_subsampled.csv')
+    test  = pd.read_csv('../processed/trial5/test_monthly_subsampled.csv')
 
     for col in ['unique_locs', 'poi_dict']:
         if col in train.columns:
