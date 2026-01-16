@@ -298,7 +298,7 @@ def _build_profiles_single_chunk(chunk_df: pd.DataFrame):
                 avg_speed = round(segment_data['speed'].mean(), 2)
 
                 # 4. array of unique locations
-                unique_loc = segment_data['location_id'].unique()
+                unique_loc = segment_data['location_id'].unique().tolist()
 
                 # 5. mean of daily max stay duration
                 mean_of_daily_max = round(
@@ -317,10 +317,13 @@ def _build_profiles_single_chunk(chunk_df: pd.DataFrame):
 
                 # 8. dominant poi category
                 if 'poi_category' in segment_data.columns and segment_data['poi_category'].notna().any():
-                    dominent_poi = segment_data['poi_category'].value_counts().idxmax()
-                    poi_dict = segment_data['poi_category'].dropna().unique()
+
+                    poi_durations = segment_data.dropna(subset=['poi_category']).groupby('poi_category')['duration'].sum()
+                    dominant_poi = poi_durations.idxmax()
+
+                    poi_dict = segment_data['poi_category'].dropna().unique().tolist()
                 else:
-                    dominent_poi = None
+                    dominant_poi = None
                     poi_dict = []
 
                 profiles.append({
@@ -336,7 +339,7 @@ def _build_profiles_single_chunk(chunk_df: pd.DataFrame):
                     'max_stay_duration': mean_of_daily_max,
                     'transformations': transformations,
                     'max_distance_from_home': max_distance_from_home,
-                    'dominent_poi': dominent_poi,
+                    'dominent_poi': dominant_poi,
                     'poi_dict': poi_dict
                 })
 
