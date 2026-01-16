@@ -211,9 +211,6 @@ def main():
     test  = pd.read_csv('../processed/test_monthly.csv')
 
     gt = pd.read_csv('../processed/anomalous_segmented.csv')
-    residents = pd.read_csv('../processed/residents.csv')
-
-    train = train[train['agent'].isin(residents['agent'].unique())].copy()
 
     train['label'] = 0
     test['label'] = 0

@@ -64,12 +64,15 @@ Each file must contain the following columns:
 
 > **Important**  
 > LIAD assumes all timestamps are in **UTC**. They are internally converted to **Asia/Tokyo** during preprocessing.
+
 > If consecutive rows in the train / test files for an agent X are the same location please merge the rows in to a single row. You can refer to the function 
 
 ```python
 def merge_consecutive_locations()
 ```
+
 in the notebooks/ LIAD_ready_data.ipynb on how to do the correct transformation of data.
+
 
 > This Pipeline works for the residents in the simulation, please customize below function in data_processing/tsm.py file in accordance with the dataset you use
 

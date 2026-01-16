@@ -5,14 +5,17 @@ from joblib import Parallel, delayed
 import math
 import os
 import ast
+import gc
 from datetime import datetime
 import matplotlib.pyplot as plt
 from sklearn.metrics import precision_recall_curve, auc
+from pathlib import Path
 
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
 
 def score_agent_group(g):
     # Fill missing train numeric with 0
@@ -41,7 +44,7 @@ def score_agent_group(g):
     pe = g["poi_dict_test"].tolist()
     score_pois_locs = np.array([len(set(b) - set(a)) for a, b in zip(pt, pe)], dtype=float)
 
-    # weights
+    # weights 1
     alpha= 0.15248
     beta= -0.0961
     gamma= 0.056233
@@ -51,6 +54,17 @@ def score_agent_group(g):
     c = 0.6357
     d = 0.043
     e = 0.001
+
+    #weights 2
+    # alpha = -0.058183330468428024
+    # beta = -0.2213398142336268
+    # gamma = 0.22550177075110456
+    # delta = -0.7087388288942588
+    # a = -0.20564926276067405
+    # b = 0.006309287255213067
+    # c = 0.5215565484850472
+    # d = 0.0463382656166072
+    # e = -0.14526639342286488
 
     total = (
         (alpha * score_count) +
@@ -64,8 +78,7 @@ def score_agent_group(g):
         (e * score_pois_locs)
     )
 
-    return float(np.max(total)) if len(total) else 0.0
-
+    return float(np.sum(total)) if len(total) else 0.0
 
 LIST_COLS = ["unique_locs", "poi_dict"]
 
@@ -86,60 +99,64 @@ def parse_list_col(s):
     return []
 
 
-train = pd.read_csv('../../processed/train_monthly.csv')
-test  = pd.read_csv('../../processed/test_monthly.csv')
+TRAIN_DIR = Path("../../processed/trial5/train_monthly")
+TEST_DIR  = Path("../../processed/trial5/test_monthly")
+
+OUT_DIR = Path("../../processed/trial5/anomaly_scores")
+OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+OUT_ALL = OUT_DIR / "anomaly_scores_all_buckets.csv"
+
+def bucket_id_from_path(p: Path) -> int:
+    return int(p.name.split("agent_bucket=")[1].split(".csv")[0])
+
+train_files = {bucket_id_from_path(p): p for p in TRAIN_DIR.glob("agent_bucket=*.csv")}
+test_files  = {bucket_id_from_path(p): p for p in TEST_DIR.glob("agent_bucket=*.csv")}
+common_buckets = sorted(set(train_files).intersection(test_files))
+
+if not common_buckets:
+    raise RuntimeError("No matching agent_bucket files found between train and test dirs.")
+
+if OUT_ALL.exists():
+    OUT_ALL.unlink()
+
+for b in common_buckets:
+    train_path = train_files[b]
+    test_path  = test_files[b]
+
+    print(f"\n=== Processing bucket {b} ===")
+    train_data = pd.read_csv(train_path)
+    test_data  = pd.read_csv(test_path)
+
+    for c in ["unique_locs", "poi_dict"]:
+        train_data[c] = train_data[c].apply(parse_list_col)
+        test_data[c]  = test_data[c].apply(parse_list_col)
+
+    # Keep only agents present in both
+    common_agents = np.intersect1d(train_data["agent"].unique(), test_data["agent"].unique())
+    train_data = train_data[train_data["agent"].isin(common_agents)]
+    test_data  = test_data[test_data["agent"].isin(common_agents)]
 
 
-for c in ["unique_locs", "poi_dict"]:
-    train[c] = train[c].apply(parse_list_col)
-    test[c]  = test[c].apply(parse_list_col)
-
-# Keep only agents present in both
-common_agents = np.intersect1d(train["agent"].unique(), test["agent"].unique())
-train = train[train["agent"].isin(common_agents)]
-test  = test[test["agent"].isin(common_agents)]
-
-KEYS = ["agent", "day_type", "time_segment"]
-merged = test.merge(train, on=KEYS, how="left", suffixes=("_test", "_train"))
+    KEYS = ["agent", "day_type", "time_segment"]
+    merged = test_data.merge(train_data, on=KEYS, how="left", suffixes=("_test", "_train"))
 
 
-for c in ["unique_locs_train", "poi_dict_train"]:
-    if c in merged.columns:
-        merged[c] = merged[c].apply(lambda x: x if isinstance(x, list) else [])
-for c in ["unique_locs_test", "poi_dict_test"]:
-    if c in merged.columns:
-        merged[c] = merged[c].apply(lambda x: x if isinstance(x, list) else [])
+    for c in ["unique_locs_train", "poi_dict_train"]:
+        if c in merged.columns:
+            merged[c] = merged[c].apply(lambda x: x if isinstance(x, list) else [])
+    for c in ["unique_locs_test", "poi_dict_test"]:
+        if c in merged.columns:
+            merged[c] = merged[c].apply(lambda x: x if isinstance(x, list) else [])
 
 
-rows = []
-for agent, g in merged.groupby("agent", sort=False):
-    rows.append({"agent": agent, "anomaly_score": score_agent_group(g)})
+    rows = []
+    for agent, g in merged.groupby("agent", sort=False):
+        rows.append({"agent": agent, "anomaly_score": score_agent_group(g)})
 
-anomaly_df = pd.DataFrame(rows).dropna(subset=["anomaly_score"])
+    anomaly_df = pd.DataFrame(rows).dropna(subset=["anomaly_score"])
 
+    out_bucket = OUT_DIR / f"anomaly_scores_bucket={b}.csv"
 
-OUT_PATH = "../../processed/anomaly_scores.csv"
-
-run_col = f"new_anomaly_score"
-
-if os.path.exists(OUT_PATH):
-    print(f"Existing anomaly_scores.csv found. Appending column: {run_col}")
-
-    existing = pd.read_csv(OUT_PATH)
-
-    merged = existing.merge(
-        anomaly_df.rename(columns={"anomaly_score": run_col}),
-        on="agent",
-        how="outer"
-    )
-
-    merged.to_csv(OUT_PATH, index=False)
-
-else:
-    print("No anomaly_scores.csv found. Creating new file.")
-
-    gt = pd.read_csv('../../processed/anomalous_agents.csv')
-    gt_anomaly_agents = set(gt['agent'].values)
-    anomaly_df['is_anomaly'] = anomaly_df['agent'].isin(gt_anomaly_agents).astype(int)
-    #anomaly_df.rename(columns={'anomaly_score': 'w_12k'}, inplace=True)
-    anomaly_df.to_csv('../../processed/anomaly_scores.csv', index=False)
+    write_header = not OUT_ALL.exists()
+    anomaly_df.to_csv(OUT_ALL, mode="a", header=write_header, index=False)

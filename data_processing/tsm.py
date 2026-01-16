@@ -6,6 +6,7 @@ import math
 from argparse import ArgumentParser
 import os
 import math
+from pathlib import Path
 # ---------- CONFIG ----------
 
 # how many parallel workers to use when building profiles
@@ -52,32 +53,6 @@ def assign_time_segment(dt):
         return '17.30-21.29'
     else:
         return '21.30-23.59'
-
-
-# ---------- FILTER AGENTS ----------
-
-def agent_type_filter(train_df: pd.DataFrame):
-    """
-    Compute total duration per agent on the train month and keep agents
-    above the 16th percentile (this needs to be customized depending on the data).
-    Works on an in-memory DataFrame (no extra csv read).
-    """
-    tmp = train_df[['agent', 'started_at', 'finished_at']].copy()
-
-    tmp['started_at'] = pd.to_datetime(tmp['started_at'])
-    tmp['finished_at'] = pd.to_datetime(tmp['finished_at'])
-
-    tmp['duration_min'] = (tmp['finished_at'] - tmp['started_at']).dt.total_seconds() / 60.0
-    tmp['duration'] = tmp['duration_min'].clip(lower=0).fillna(0)
-
-    train_agent_dur = tmp.groupby('agent')['duration'].sum()
-
-    df = pd.DataFrame({'train_duration': train_agent_dur}).fillna(0)
-
-    q1_value = df['train_duration'].quantile(0.16)
-    df_top_q1 = df[df['train_duration'] >= q1_value]
-
-    return df_top_q1.index
 
 
 # ---------- SPLIT BY DAY + TIME BINS ----------
@@ -145,7 +120,7 @@ def split_by_time_bins(df: pd.DataFrame) -> pd.DataFrame:
 
 # ---------- MAIN DATA PROCESSING PER MONTH ----------
 
-def data_processing(df: pd.DataFrame, residents) -> pd.DataFrame:
+def data_processing(df: pd.DataFrame) -> pd.DataFrame:
     """
     Full processing pipeline for a month (train or test):
     - filter agents
@@ -156,9 +131,7 @@ def data_processing(df: pd.DataFrame, residents) -> pd.DataFrame:
     - add day_type, time_segment, etc.
     """
     print("Starting data_processing...")
-    df = df[df['agent'].isin(residents)].copy()
-    print("After resident filter:", df.shape)
-
+    
     # Timezone handling: we assume the timestamps are UTC, then we convert to Asia/Tokyo
     df['started_at'] = pd.to_datetime(df['started_at'], utc=True).dt.tz_convert('Asia/Tokyo')
     df['finished_at'] = pd.to_datetime(df['finished_at'], utc=True).dt.tz_convert('Asia/Tokyo')
@@ -407,8 +380,6 @@ def build_profiles(data: pd.DataFrame, n_jobs: int = 1) -> pd.DataFrame:
 
 
 # ---------------- CONFIG ----------------
-N_PARTS = 100               # "1% by 1%" ≈ 100 partitions
-READ_CHUNKSIZE = 1_000_000 
 N_JOBS_PROFILES = 1         # adjust based on CPU cores
 
 PART_DIR_TRAIN = "../processed/parts_train"
@@ -416,55 +387,55 @@ PART_DIR_TEST  = "../processed/parts_test"
 
 
 # ---------------- PARTITIONER ----------------
-def partition_csv_by_agent(
-    csv_path: str,
-    out_dir: str,
-    n_parts: int = 100,
-    chunksize: int = 1_000_000,
-    usecols=None,
-):
-    """
-    Stream-read a huge CSV and split into n_parts CSV files based on agent shard.
-    Shard rule: shard = agent % n_parts  (fast, deterministic)
-    Ensures all rows of an agent go to one shard => safe to process independently.
-    """
-    os.makedirs(out_dir, exist_ok=True)
+# def partition_csv_by_agent(
+#     csv_path: str,
+#     out_dir: str,
+#     n_parts: int = 100,
+#     chunksize: int = 1_000_000,
+#     usecols=None,
+# ):
+#     """
+#     Stream-read a huge CSV and split into n_parts CSV files based on agent shard.
+#     Shard rule: shard = agent % n_parts  (fast, deterministic)
+#     Ensures all rows of an agent go to one shard => safe to process independently.
+#     """
+#     os.makedirs(out_dir, exist_ok=True)
 
 
-    for p in range(n_parts):
-        part_path = os.path.join(out_dir, f"part_{p:03d}.csv")
-        if os.path.exists(part_path):
-            os.remove(part_path)
+#     for p in range(n_parts):
+#         part_path = os.path.join(out_dir, f"part_{p:03d}.csv")
+#         if os.path.exists(part_path):
+#             os.remove(part_path)
 
-    print(f"Partitioning {csv_path} into {n_parts} shards at {out_dir} ...")
+#     print(f"Partitioning {csv_path} into {n_parts} shards at {out_dir} ...")
 
-    reader = pd.read_csv(csv_path, chunksize=chunksize, usecols=usecols)
+#     reader = pd.read_csv(csv_path, chunksize=chunksize, usecols=usecols)
 
-    total_rows = 0
-    for i, chunk in enumerate(reader):
-        if "agent" not in chunk.columns:
-            raise ValueError("CSV must contain 'agent' column.")
+#     total_rows = 0
+#     for i, chunk in enumerate(reader):
+#         if "agent" not in chunk.columns:
+#             raise ValueError("CSV must contain 'agent' column.")
 
-        # compute shard id
-        shard = (chunk["agent"].astype(np.int64) % n_parts).astype(np.int16)
-        chunk["_shard"] = shard
+#         # compute shard id
+#         shard = (chunk["agent"].astype(np.int64) % n_parts).astype(np.int16)
+#         chunk["_shard"] = shard
 
-        # write each shard chunk
-        for p in range(n_parts):
-            sub = chunk[chunk["_shard"] == p]
-            if sub.empty:
-                continue
-            sub = sub.drop(columns=["_shard"])
+#         # write each shard chunk
+#         for p in range(n_parts):
+#             sub = chunk[chunk["_shard"] == p]
+#             if sub.empty:
+#                 continue
+#             sub = sub.drop(columns=["_shard"])
 
-            part_path = os.path.join(out_dir, f"part_{p:03d}.csv")
-            write_header = not os.path.exists(part_path)
-            sub.to_csv(part_path, mode="a", index=False, header=write_header)
+#             part_path = os.path.join(out_dir, f"part_{p:03d}.csv")
+#             write_header = not os.path.exists(part_path)
+#             sub.to_csv(part_path, mode="a", index=False, header=write_header)
 
-        total_rows += len(chunk)
-        if (i + 1) % 5 == 0:
-            print(f"  partitioned chunks: {i+1}, rows so far: {total_rows:,}")
+#         total_rows += len(chunk)
+#         if (i + 1) % 5 == 0:
+#             print(f"  partitioned chunks: {i+1}, rows so far: {total_rows:,}")
 
-    print(f"Done partitioning. Total rows: {total_rows:,}")
+#     print(f"Done partitioning. Total rows: {total_rows:,}")
 
 
 def append_df(df: pd.DataFrame, path: str):
@@ -472,121 +443,102 @@ def append_df(df: pd.DataFrame, path: str):
     header = not os.path.exists(path)
     df.to_csv(path, mode="a", index=False, header=header)
 
+def bucket_id_from_path(p: Path) -> int:
+    # expects "agent_bucket=12.parquet"
+    return int(p.name.split("agent_bucket=")[1].split(".parquet")[0])
 
-# ---------------- MAIN ----------------
-if __name__ == "__main__":
-    train_path = "../processed/train.csv"
-    test_path  = "../processed/test.csv"
+def process_one_file(in_path: Path, out_path: Path, repartition: bool):
+    """
+    Read one parquet, process it, build monthly profiles, and append/save to out_path.
+    If repartition=False and out_path exists, skip.
+    """
+    out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    parser = ArgumentParser(description="Shard-by-agent processing (1% partitions) and append outputs")
-    parser.add_argument("datatype", type=int, choices=[1, 2], help="1=Train, 2=Test")
+    if out_path.exists() and not repartition:
+        print(f"SKIP (exists): {out_path}")
+        return
+
+    print(f"READ : {in_path}")
+    df = pd.read_parquet(in_path)
+
+    processed = data_processing(df)
+    monthly_profiles = build_profiles(processed, n_jobs=N_JOBS_PROFILES)
+
+    # append_df should handle "create if missing, else append"
+    append_df(monthly_profiles, out_path)
+
+    # free memory
+    del df, processed, monthly_profiles
+    print(f"WROTE: {out_path}")
+
+
+def main():
+    train_dir = Path("../processed/trial5/stop_past")
+    test_dir  = Path("../processed/trial5/stop_future")
+
+    out_train_dir = Path("../processed/trial5/train_monthly")
+    out_test_dir  = Path("../processed/trial5/test_monthly")
+
+    parser = ArgumentParser(description="Build monthly profiles per agent_bucket for train & test")
     parser.add_argument("--repartition", action="store_true",
-                        help="Force rebuild shard files even if they exist")
+                        help="Force rebuild output files even if they exist")
     args = parser.parse_args()
 
-    # --- STEP 0: ensure partitions exist ---
-    if args.datatype == 1:
-        part_dir = PART_DIR_TRAIN
-        src_path = train_path
-        monthly_out = "../processed/train_monthly.csv"
-        weekly_out  = "../processed/train_weekly.csv"
-    else:
-        part_dir = PART_DIR_TEST
-        src_path = test_path
-        monthly_out = "../processed/test_monthly.csv"
-        weekly_out  = "../processed/test_weekly.csv"
+    train_files = {bucket_id_from_path(p): p for p in train_dir.glob("agent_bucket=*.parquet")}
+    test_files  = {bucket_id_from_path(p): p for p in test_dir.glob("agent_bucket=*.parquet")}
 
-    need_partition = args.repartition or (not os.path.exists(part_dir)) or (
-        len([f for f in os.listdir(part_dir) if f.startswith("part_") and f.endswith(".csv")]) < N_PARTS
-    )
+    common = sorted(set(train_files).intersection(test_files))
 
-    if need_partition:
+    print(f"Train buckets: {len(train_files)} | Test buckets: {len(test_files)} | Common: {len(common)}")
+    if not common:
+        raise RuntimeError("No matching agent_bucket=*.parquet files found between train and test.")
 
-        needed_cols = [
-            "agent", "started_at", "finished_at", "location_id",
-            "latitude", "longitude", "poi_category"
-        ]
-        partition_csv_by_agent(
-            csv_path=src_path,
-            out_dir=part_dir,
-            n_parts=N_PARTS,
-            chunksize=READ_CHUNKSIZE,
-            usecols=None,
-        )
-    else:
-        print(f"Using existing partitions in {part_dir}")
+    for b in common:
+        in_train = train_files[b]
+        in_test  = test_files[b]
 
-    # --- STEP 1: get residents (computed from TRAIN only) ---
-    residents_cache = "../processed/residents.csv"
-    if os.path.exists(residents_cache):
-        residents = pd.read_csv(residents_cache)["agent"].values
-        print("Loaded residents:", len(residents))
-    else:
-        # Compute residents by streaming TRAIN partitions (cheaper than reading full 10GB again if already partitioned)
-        print("Computing residents from TRAIN partitions...")
-        dur_sum = {}  # agent -> total_duration_minutes
+        out_train = out_train_dir / f"agent_bucket={b}.csv"
+        out_test  = out_test_dir  / f"agent_bucket={b}.csv"
 
-        # We'll compute durations from TRAIN shards only
-        if not os.path.exists(PART_DIR_TRAIN):
-            raise RuntimeError("Train partitions not found; run train partitioning first or set --repartition on train.")
+        print(f"\n=== BUCKET {b} ===")
+        process_one_file(in_train, out_train, repartition=args.repartition)
+        process_one_file(in_test,  out_test,  repartition=args.repartition)
 
-        for p in range(N_PARTS):
-            part_path = os.path.join(PART_DIR_TRAIN, f"part_{p:03d}.csv")
-            if not os.path.exists(part_path):
-                continue
+if __name__ == "__main__":
+    main()
 
-            # stream this partition file too (it might still be large)
-            for chunk in pd.read_csv(part_path, chunksize=READ_CHUNKSIZE, usecols=["agent", "started_at", "finished_at"]):
-                chunk["started_at"] = pd.to_datetime(chunk["started_at"])
-                chunk["finished_at"] = pd.to_datetime(chunk["finished_at"])
-                dur = (chunk["finished_at"] - chunk["started_at"]).dt.total_seconds() / 60.0
-                dur = dur.clip(lower=0).fillna(0)
+    # # --- STEP 0: ensure partitions exist ---
+    # if args.datatype == 1:
+    #     part_dir = PART_DIR_TRAIN
+    #     src_path = train_path
+    #     monthly_out = "/Users/chanuka/Desktop/codespaces/liad/processed/sim2_evalb/train_monthly.csv"
+    #     weekly_out  = "../processed/train_weekly.csv"
+    # else:
+    #     part_dir = PART_DIR_TEST
+    #     src_path = test_path
+    #     monthly_out = "../processed/test_monthly.csv"
+    #     weekly_out  = "../processed/test_weekly.csv"
 
-                g = dur.groupby(chunk["agent"]).sum()
-                for a, v in g.items():
-                    dur_sum[a] = dur_sum.get(a, 0.0) + float(v)
+    # need_partition = args.repartition or (not os.path.exists(part_dir)) or (
+    #     len([f for f in os.listdir(part_dir) if f.startswith("part_") and f.endswith(".csv")]) < N_PARTS
+    # )
 
-            print(f"  residents pass: partition {p:03d} done")
+    # if need_partition:
 
-        dur_series = pd.Series(dur_sum, name="train_duration")
-        q = dur_series.quantile(0.16)
-        residents = dur_series[dur_series >= q].index.values
+    #     needed_cols = [
+    #         "agent", "started_at", "finished_at", "location_id",
+    #         "latitude", "longitude", "poi_category"
+    #     ]
+    #     partition_csv_by_agent(
+    #         csv_path=src_path,
+    #         out_dir=part_dir,
+    #         n_parts=N_PARTS,
+    #         chunksize=READ_CHUNKSIZE,
+    #         usecols=None,
+    #     )
+    # else:
+    #     print(f"Using existing partitions in {part_dir}")
 
-        pd.DataFrame({"agent": residents}).to_csv(residents_cache, index=False)
-        print("Residents computed + cached:", len(residents))
-
-    residents_set = set(residents.tolist())
-
-    # --- STEP 2: wipe outputs
-    for out in [monthly_out, weekly_out]:
-        if os.path.exists(out):
-            os.remove(out)
-            print(f"Removed existing output: {out}")
-
-    # --- STEP 3: process partitions 0..99, append monthly & weekly ---
-    print("Processing partitions and appending outputs...")
-
-    for p in range(N_PARTS):
-        part_path = os.path.join(part_dir, f"part_{p:03d}.csv")
-        if not os.path.exists(part_path):
-            continue
-
-        print(f"\n=== Partition {p:03d} ===")
-
-        # Load entire shard into memory (since it's ~1% of data)
-        df = pd.read_csv(part_path)
-
-        # filter to residents
-        df = df[df["agent"].isin(residents_set)]
-        if df.empty:
-            print("  shard empty after residents filter; skipping")
-            continue
-
-
-        processed = data_processing(df, residents)
-        
-        # monthly profiles
-        monthly_profiles = build_profiles(processed, n_jobs=N_JOBS_PROFILES)
 
         # weekly profiles
         #processed["week"] = processed["started_at"].dt.to_period("W").astype(str)
@@ -600,10 +552,10 @@ if __name__ == "__main__":
         #weekly_profiles = pd.concat(weekly_list, ignore_index=True)
 
         #Append to final CSVs (safe because agents do not overlap across partitions)
-        append_df(monthly_profiles, monthly_out)
+#        append_df(monthly_profiles, monthly_out)
         #append_df(weekly_profiles, weekly_out)
 
         # free memory aggressively
-        del df, processed, monthly_profiles #, weekly_profiles
+#        del df, processed, monthly_profiles #, weekly_profiles
 
-    print("\nAll partitions processed. Done.")
+#    print("\nAll partitions processed. Done.")
