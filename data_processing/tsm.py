@@ -5,6 +5,8 @@ from joblib import Parallel, delayed
 import math
 from argparse import ArgumentParser
 import os
+from concurrent.futures import ProcessPoolExecutor
+import functools
 import math
 from pathlib import Path
 # ---------- CONFIG ----------
@@ -475,6 +477,19 @@ def process_one_file(in_path: Path, out_path: Path, repartition: bool):
     print(f"WROTE: {out_path}")
 
 
+def process_bucket(b, train_files, test_files, out_train_dir, out_test_dir, repartition):
+    """Helper function to process a single bucket pair."""
+    in_train = train_files[b]
+    in_test  = test_files[b]
+
+    out_train = out_train_dir / f"agent_bucket={b}.csv"
+    out_test  = out_test_dir  / f"agent_bucket={b}.csv"
+
+    print(f"Starting Bucket {b}...")
+    process_one_file(in_train, out_train, repartition=repartition)
+    process_one_file(in_test,  out_test,  repartition=repartition)
+    return f"Finished Bucket {b}"
+
 def main():
     train_dir = Path("../processed/trial5/stop_past")
     test_dir  = Path("../processed/trial5/stop_future")
@@ -491,24 +506,35 @@ def main():
     test_files  = {bucket_id_from_path(p): p for p in test_dir.glob("agent_bucket=*.parquet")}
 
     common = sorted(set(train_files).intersection(test_files))
+    
+    # 2. Determine number of workers
+    # Since you have high RAM, you can set this to your CPU count or a bit less
+    import os
+    max_workers = os.cpu_count() - 2  # Leave a few cores for the OS
+    
+    print(f"Parallelizing {len(common)} buckets across {max_workers} cores...")
 
-    print(f"Train buckets: {len(train_files)} | Test buckets: {len(test_files)} | Common: {len(common)}")
-    if not common:
-        raise RuntimeError("No matching agent_bucket=*.parquet files found between train and test.")
+    # 3. Execute in parallel
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        # Create a partial function to pass the fixed arguments
+        func = functools.partial(
+            process_bucket, 
+            train_files=train_files, 
+            test_files=test_files, 
+            out_train_dir=out_train_dir, 
+            out_test_dir=out_test_dir, 
+            repartition=args.repartition
+        )
+        
+        # Map the list of buckets to the function
+        results = list(executor.map(func, common))
 
-    for b in common:
-        in_train = train_files[b]
-        in_test  = test_files[b]
-
-        out_train = out_train_dir / f"agent_bucket={b}.csv"
-        out_test  = out_test_dir  / f"agent_bucket={b}.csv"
-
-        print(f"\n=== BUCKET {b} ===")
-        process_one_file(in_train, out_train, repartition=args.repartition)
-        process_one_file(in_test,  out_test,  repartition=args.repartition)
+    for res in results:
+        print(res)
 
 if __name__ == "__main__":
     main()
+
 
     # # --- STEP 0: ensure partitions exist ---
     # if args.datatype == 1:
