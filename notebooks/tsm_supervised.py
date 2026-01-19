@@ -207,8 +207,8 @@ def main():
     os.environ["OPENBLAS_NUM_THREADS"] = "1"
     os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
-    train = pd.read_csv('../processed/trial5/train_monthly_subsampled.csv')
-    test  = pd.read_csv('../processed/trial5/test_monthly_subsampled.csv')
+    train = pd.read_csv('/Users/chanuka/Desktop/codespaces/liad/processed/trial5/10k/train_monthly_subsampled.csv')
+    test  = pd.read_csv('/Users/chanuka/Desktop/codespaces/liad/processed/trial5/10k/test_monthly_subsampled.csv')
 
     for col in ['unique_locs', 'poi_dict']:
         if col in train.columns:
