@@ -166,11 +166,23 @@ def process_one_file(in_path: Path, out_path: Path, repartition: bool):
     df = pd.read_parquet(in_path)
 
     processed = data_processing(df)
-    monthly_profiles = build_profiles(processed, n_jobs=N_JOBS_PROFILES)
+    #monthly_profiles = build_profiles(processed, n_jobs=N_JOBS_PROFILES)
+    #append_df(monthly_profiles, out_path)
 
-    append_df(monthly_profiles, out_path)
+    # weekly profiles
+    processed["week"] = processed["started_at"].dt.to_period("W").astype(str)
+    weekly_list = []
+    i = 0
+    for wk, chunk in processed.groupby("week"):
+       prof = build_profiles(chunk, n_jobs=N_JOBS_PROFILES)
+       prof["chunk"] = i
+       weekly_list.append(prof)
+       i += 1
+    weekly_profiles = pd.concat(weekly_list, ignore_index=True)
 
-    del df, processed, monthly_profiles
+    append_df(weekly_profiles, out_path)
+
+    del df, processed, weekly_profiles
     print(f"WROTE: {out_path}")
 
 
@@ -188,11 +200,11 @@ def process_bucket(b, train_files, test_files, out_train_dir, out_test_dir, repa
     return f"Finished Bucket {b}"
 
 def main():
-    train_dir = Path("../processed/trial5/2m/monthly/month1/stop_past")
-    test_dir  = Path("../processed/trial5/2m/monthly/month1/stop_future")
+    train_dir = Path("../processed/trial5/10k/whole/stop_past")
+    test_dir  = Path("../processed/trial5/10k/whole/stop_future")
 
-    out_train_dir = Path("../processed/trial5/2m/monthly/month1_train")
-    out_test_dir  = Path("../processed/trial5/2m/monthly/month1_test")
+    out_train_dir = Path("../processed/trial5/10k/whole/train_weekly")
+    out_test_dir  = Path("../processed/trial5/10k/whole/test_weekly")
 
     parser = ArgumentParser(description="Build monthly profiles per agent_bucket for train & test")
     parser.add_argument("--repartition", action="store_true",
@@ -226,57 +238,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-    # # --- STEP 0: ensure partitions exist ---
-    # if args.datatype == 1:
-    #     part_dir = PART_DIR_TRAIN
-    #     src_path = train_path
-    #     monthly_out = "/Users/chanuka/Desktop/codespaces/liad/processed/sim2_evalb/train_monthly.csv"
-    #     weekly_out  = "../processed/train_weekly.csv"
-    # else:
-    #     part_dir = PART_DIR_TEST
-    #     src_path = test_path
-    #     monthly_out = "../processed/test_monthly.csv"
-    #     weekly_out  = "../processed/test_weekly.csv"
-
-    # need_partition = args.repartition or (not os.path.exists(part_dir)) or (
-    #     len([f for f in os.listdir(part_dir) if f.startswith("part_") and f.endswith(".csv")]) < N_PARTS
-    # )
-
-    # if need_partition:
-
-    #     needed_cols = [
-    #         "agent", "started_at", "finished_at", "location_id",
-    #         "latitude", "longitude", "poi_category"
-    #     ]
-    #     partition_csv_by_agent(
-    #         csv_path=src_path,
-    #         out_dir=part_dir,
-    #         n_parts=N_PARTS,
-    #         chunksize=READ_CHUNKSIZE,
-    #         usecols=None,
-    #     )
-    # else:
-    #     print(f"Using existing partitions in {part_dir}")
-
-
-        # weekly profiles
-        #processed["week"] = processed["started_at"].dt.to_period("W").astype(str)
-        #weekly_list = []
-        #i = 0
-        #for wk, chunk in processed.groupby("week"):
-        #    prof = build_profiles(chunk, n_jobs=N_JOBS_PROFILES)
-        #    prof["chunk"] = i
-        #    weekly_list.append(prof)
-        #    i += 1
-        #weekly_profiles = pd.concat(weekly_list, ignore_index=True)
-
-        #Append to final CSVs (safe because agents do not overlap across partitions)
-#        append_df(monthly_profiles, monthly_out)
-        #append_df(weekly_profiles, weekly_out)
-
-        # free memory aggressively
-#        del df, processed, monthly_profiles #, weekly_profiles
-
-#    print("\nAll partitions processed. Done.")
