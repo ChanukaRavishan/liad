@@ -1,0 +1,44 @@
+{
+  "description": "LogReg learned weights on per-test-row min-components vs normal train rows (label==0).",
+  "features": [
+    "min_count_diff",
+    "min_dist_diff",
+    "min_speed_diff",
+    "min_max_stay_diff",
+    "min_transformations_diff",
+    "min_max_distance_diff",
+    "min_dom_changed",
+    "min_new_locs",
+    "min_new_pois"
+  ],
+  "weights_raw": {
+    "min_count_diff": 0.28088974908420333,
+    "min_dist_diff": 0.14602354124695027,
+    "min_speed_diff": 0.5006980920173846,
+    "min_max_stay_diff": 0.024093030548229217,
+    "min_transformations_diff": 0.3315881255028507,
+    "min_max_distance_diff": 0.9338640836044401,
+    "min_dom_changed": 0.9280968268046937,
+    "min_new_locs": 0.2039041326202486,
+    "min_new_pois": -0.6382384249694872
+  },
+  "bias_raw": -0.3156112889014328,
+  "weights_scaled": {
+    "min_count_diff": 0.07994244473502991,
+    "min_dist_diff": 0.04183784272886245,
+    "min_speed_diff": 0.18608365157324283,
+    "min_max_stay_diff": 0.001760321493724962,
+    "min_transformations_diff": 0.05214851839214716,
+    "min_max_distance_diff": 0.2654405954096082,
+    "min_dom_changed": 0.09673206543160451,
+    "min_new_locs": 0.17130224351821932,
+    "min_new_pois": -0.21923514362612334
+  },
+  "bias_scaled": -0.16761557558692597,
+  "metrics": {
+    "cv_pr_auc_mean": 0.05316130513404762,
+    "cv_pr_auc_std": 0.0035070812017372905,
+    "cv_roc_auc_mean": 0.6446681846216195,
+    "cv_roc_auc_std": 0.009968314935994586
+  }
+}

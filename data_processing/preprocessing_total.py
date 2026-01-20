@@ -2,11 +2,11 @@ from pathlib import Path
 import pandas as pd
 from helper_functions import agent_type_filter
 
-TRAIN_DIR = Path("../data/trail5/10k/stop_past")
-TEST_DIR  = Path("../data/trail5/10k/stop_future")
+TRAIN_DIR = Path("../data/trail5/2m/stop_past")
+TEST_DIR  = Path("../data/trail5/2m/stop_future")
 
-OUT_TRAIN_DIR = Path("../processed/trial5/10k/stop_past")
-OUT_TEST_DIR  = Path("../processed/trial5/10k/stop_future")
+OUT_TRAIN_DIR = Path("../processed/trial5/2m/whole/stop_past")
+OUT_TEST_DIR  = Path("../processed/trial5/2m/whole/stop_future")
 
 OUT_TRAIN_DIR.mkdir(parents=True, exist_ok=True)
 OUT_TEST_DIR.mkdir(parents=True, exist_ok=True)
@@ -14,10 +14,10 @@ OUT_TEST_DIR.mkdir(parents=True, exist_ok=True)
 PREC = 5
 
 def bucket_id_from_path(p: Path) -> int:
-    return int(p.name.split("agent_bucket=")[1].split(".parquet")[0])
+    return int(p.name.split("agent_bucket_")[1].split(".parquet")[0])
 
-train_files = {bucket_id_from_path(p): p for p in TRAIN_DIR.glob("agent_bucket=*.parquet")}
-test_files  = {bucket_id_from_path(p): p for p in TEST_DIR.glob("agent_bucket=*.parquet")}
+train_files = {bucket_id_from_path(p): p for p in TRAIN_DIR.glob("agent_bucket_*.parquet")}
+test_files  = {bucket_id_from_path(p): p for p in TEST_DIR.glob("agent_bucket_*.parquet")}
 common_buckets = sorted(set(train_files).intersection(test_files))
 
 if not common_buckets:
@@ -29,7 +29,10 @@ for b in common_buckets:
 
     print(f"\n=== Processing bucket {b} ===")
     train_data = pd.read_parquet(train_path)
+    train_data.rename(columns={"user_id": "agent", "category": "poi_category"}, inplace=True)
+    
     test_data  = pd.read_parquet(test_path)
+    test_data.rename(columns={"user_id": "agent", "category": "poi_category"}, inplace=True)
 
     residents = agent_type_filter(train_data)
     train_data = train_data[train_data["agent"].isin(residents)].copy()
@@ -68,9 +71,6 @@ for b in common_buckets:
 
     train_data["location_id"] = train_data["location_id"].astype("int")
     test_data["location_id"]  = test_data["location_id"].astype("int")
-
-    train_data = train_data.rename(columns={"category": "poi_category"})
-    test_data  = test_data.rename(columns={"category": "poi_category"})
 
     drop_cols = ["distance_meters", "duration_min", "poi_id", "lat_q", "lon_q"]
     train_data = train_data.drop(columns=[c for c in drop_cols if c in train_data.columns])
