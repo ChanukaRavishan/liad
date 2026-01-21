@@ -14,7 +14,7 @@ NUMERIC_COLS = [
 ]
 
 def bucket_id_from_path(p: Path) -> int:
-    return int(p.name.split("agent_bucket=")[1].split(".parquet")[0])
+    return int(p.name.split("agent_bucket=")[1].split(".csv")[0])
 
 def fit_global_robust_scaler(
     train_files: dict,
@@ -33,7 +33,7 @@ def fit_global_robust_scaler(
     print('reading all train: memory heavy so wait yeah')
 
     for b, path in sorted(train_files.items()):
-        df = pd.read_parquet(path, columns=(numeric_cols + (["label"] if fit_on_label0 else [])))
+        df = pd.read_csv(path, columns=(numeric_cols + (["label"] if fit_on_label0 else [])))
 
         if fit_on_label0 and "label" in df.columns:
             df = df[df["label"] == 0]
@@ -75,7 +75,7 @@ def transform_and_write_all(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     for b, path in sorted(files.items()):
-        df = pd.read_parquet(path)
+        df = pd.read_csv(path)
         missing = [c for c in numeric_cols if c not in df.columns]
         if missing:
             raise ValueError(f"{path.name} missing columns: {missing}")
@@ -83,7 +83,7 @@ def transform_and_write_all(
         df[numeric_cols] = scaler.transform(df[numeric_cols]).astype("float32")
 
         out_path = out_dir / path.name
-        df.to_parquet(out_path, index=False)
+        df.to_csv(out_path, index=False)
         print(f"Wrote {out_path}")
 
 
@@ -96,8 +96,8 @@ OUT_TEST_DIR  = Path("../processed/trial5/2m/scaled_global/test_weekly")
 
 SCALER_PATH = Path("../processed/trial5/2m/scaled_global/robust_scaler.joblib")
 
-train_files = {bucket_id_from_path(p): p for p in TRAIN_DIR.glob("agent_bucket=*.parquet")}
-test_files  = {bucket_id_from_path(p): p for p in TEST_DIR.glob("agent_bucket=*.parquet")}
+train_files = {bucket_id_from_path(p): p for p in TRAIN_DIR.glob("agent_bucket=*.csv")}
+test_files  = {bucket_id_from_path(p): p for p in TEST_DIR.glob("agent_bucket=*.csv")}
 
 common_buckets = sorted(set(train_files).intersection(test_files))
 if not common_buckets:

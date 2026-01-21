@@ -155,10 +155,10 @@ OUT_DIR = "../processed/trial5/2m/weekly_anomaly/weekly.csv"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 def bucket_id_from_path(p: Path) -> int:
-    return int(p.name.split("agent_bucket=")[1].split(".parquet")[0])
+    return int(p.name.split("agent_bucket=")[1].split(".csv")[0])
 
-train_files = {bucket_id_from_path(p): p for p in TRAIN_DIR.glob("agent_bucket=*.parquet")}
-test_files  = {bucket_id_from_path(p): p for p in TEST_DIR.glob("agent_bucket=*.parquet")}
+train_files = {bucket_id_from_path(p): p for p in TRAIN_DIR.glob("agent_bucket=*.csv")}
+test_files  = {bucket_id_from_path(p): p for p in TEST_DIR.glob("agent_bucket=*.csv")}
 common_buckets = sorted(set(train_files).intersection(test_files))
 
 if not common_buckets:
@@ -169,6 +169,6 @@ for b in common_buckets:
     test_path  = test_files[b]
 
     print(f"\n=== Processing bucket {b} ===")
-    train_data = pd.read_parquet(train_path)
-    test_data  = pd.read_parquet(test_path)
+    train_data = pd.read_csv(train_path)
+    test_data  = pd.read_csv(test_path)
     score_weekly_partitioned(train_data, test_data, OUT_DIR)
