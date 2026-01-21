@@ -33,15 +33,8 @@ def fit_global_robust_scaler(
     print('reading all train: memory heavy so wait yeah')
 
     for b, path in sorted(train_files.items()):
-        df = pd.read_csv(path, columns=(numeric_cols + (["label"] if fit_on_label0 else [])))
+        df = pd.read_csv(path)
 
-        if fit_on_label0 and "label" in df.columns:
-            df = df[df["label"] == 0]
-
-        if df.empty:
-            continue
-
-        # Optional per-bucket sampling for memory control
         if sample_per_bucket is not None and len(df) > sample_per_bucket:
             idx = rng.choice(len(df), size=sample_per_bucket, replace=False)
             df = df.iloc[idx]
