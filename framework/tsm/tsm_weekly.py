@@ -6,66 +6,15 @@ import math
 import os
 import ast
 import gc
-from datetime import datetime
 import matplotlib.pyplot as plt
 from sklearn.metrics import precision_recall_curve, auc
 from pathlib import Path
-
-def to_fset(x):
-    return frozenset(x) if isinstance(x, list) else frozenset()
+from typing import Tuple, List
 
 def append_df(df: pd.DataFrame, path: str):
     header = not os.path.exists(path)
     df.to_csv(path, mode="a", index=False, header=header)
 
-def load_weekly_csv(file):
-    """
-    Load weekly profile CSV with memory-friendly dtypes.
-    Adjust dtypes if your columns differ.
-    """
-    dtypes = {
-        "agent": "int64",
-        "day_type": "category",
-        "time_segment": "category",
-        "dominent_poi": "category",
-        # chunk (week index) might exist:
-        "chunk": "int16",
-    }
-
-    # numeric columns we need
-    num_cols = [
-        "unique_location_ids", "avg_distance_from_home_km", "avg_speed_kmh",
-        "max_stay_duration", "transformations", "max_distance_from_home",
-    ]
-
-    df = file.copy()
-
-    # cast / clean
-    if "agent" in df.columns:
-        df["agent"] = pd.to_numeric(df["agent"], errors="coerce").fillna(-1).astype("int64")
-
-    for c, t in dtypes.items():
-        if c in df.columns:
-            try:
-                df[c] = df[c].astype(t)
-            except Exception:
-                pass
-
-    for c in num_cols:
-        if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0.0).astype("float32")
-
-
-    df["unique_locs_set"] = df["unique_locs"].apply(to_fset)
-    df["poi_dict_set"] = df["poi_dict"].apply(to_fset)
-
-    # keep only needed columns to cut RAM
-    keep = ["agent", "day_type", "time_segment", "dominent_poi",
-            "unique_locs_set", "poi_dict_set"] + num_cols
-    keep = [c for c in keep if c in df.columns]
-    df = df[keep].copy()
-
-    return df
 
 
 def score_partition(train_p: pd.DataFrame, test_p: pd.DataFrame) -> pd.DataFrame:
@@ -79,19 +28,17 @@ def score_partition(train_p: pd.DataFrame, test_p: pd.DataFrame) -> pd.DataFrame
         return pd.DataFrame(columns=["agent", "anomaly_score"])
 
     # weights pinned as plain floats
-    alpha = 0.12843882159674627
-    beta = 0.1277477026006959
-    gamma = 0.27669311145381176
-    delta = 0.16113361696495052
-    a = 0.12838810029558317
-    b = 0.3045173365002024
-    c = 0.760066526759694
-    d = 0.12433512484214806
-    e = -0.14401261257898515
-
+    alpha = 0.280890
+    beta = 0.146024
+    gamma = 0.146024
+    delta = 0.203904
+    a = 0.024093
+    b = 0.331588
+    c = 0.933864
+    d = 0.928097
+    e = -0.638238
+    
     KEYS = ["agent", "day_type", "time_segment"]
-    NUM = ["unique_location_ids","avg_distance_from_home_km","avg_speed_kmh",
-           "max_stay_duration","transformations","max_distance_from_home"]
 
     test_p = test_p.reset_index(drop=True)
     test_p["test_row_id"] = np.arange(len(test_p), dtype=np.int64)
@@ -119,15 +66,21 @@ def score_partition(train_p: pd.DataFrame, test_p: pd.DataFrame) -> pd.DataFrame
     ).astype(np.float32)
 
     # set diffs (tight, but only on this partition’s merged pairs)
-    t_loc = pairs["unique_locs_set_test"].to_list()
-    r_loc = pairs["unique_locs_set_train"].to_list()
-    new_locs = np.fromiter((len(t - r) for t, r in zip(t_loc, r_loc)),
-                           dtype=np.float32, count=len(pairs))
+    t_loc = pairs["unique_locs_test"].to_list()
+    r_loc = pairs["unique_locs_train"].to_list()
+    new_locs = np.fromiter(
+    (len(set(ast.literal_eval(t)) - set(ast.literal_eval(r))) 
+     for t, r in zip(t_loc, r_loc)),
+    dtype=np.float32, 
+    count=len(pairs))
 
-    t_poi = pairs["poi_dict_set_test"].to_list()
-    r_poi = pairs["poi_dict_set_train"].to_list()
-    new_pois = np.fromiter((len(t - r) for t, r in zip(t_poi, r_poi)),
-                           dtype=np.float32, count=len(pairs))
+    t_poi = pairs["poi_dict_test"].to_list()
+    r_poi = pairs["poi_dict_train"].to_list()
+    new_pois = np.fromiter(
+    (len(set(ast.literal_eval(t)) - set(ast.literal_eval(r))) 
+     for t, r in zip(t_poi, r_poi)),
+    dtype=np.float32, 
+    count=len(pairs))
 
     total = (
         (alpha * score_count) +
@@ -151,7 +104,7 @@ def score_partition(train_p: pd.DataFrame, test_p: pd.DataFrame) -> pd.DataFrame
     min_df = min_per_test.to_frame("min_score").join(test_agents, how="left")
 
     # max per agent
-    out = min_df.groupby("agent", sort=False)["min_score"].max().reset_index()
+    out = min_df.groupby("agent", sort=False)["min_score"].sum().reset_index()
     out.rename(columns={"min_score": "anomaly_score"}, inplace=True)
 
     return out
@@ -161,7 +114,7 @@ def score_partition(train_p: pd.DataFrame, test_p: pd.DataFrame) -> pd.DataFrame
 
 def score_weekly_partitioned(train, test,
                              out_path: str,
-                             n_parts: int = 200):
+                             n_parts: int = 100):
     """
     n_parts=100 means ~1% per shard. Use 200/500 if merge still heavy.
     """
@@ -194,11 +147,28 @@ def score_weekly_partitioned(train, test,
 
 
 
+TRAIN_DIR = Path("../../processed/trial5/2m/scaled_global/train_weekly")
+TEST_DIR  = Path("../../processed/trial5/2m/scaled_global/test_weekly")
 
-train = pd.read_csv('')
-test = pd.read_csv('')
+OUT_DIR = "../processed/trial5/2m/weekly_anomaly/weekly.csv"
 
-train = load_weekly_csv(train)
-test  = load_weekly_csv(test)
+OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-score_weekly_partitioned(train, test, '../../processed/trial5/10k/anomaly_scores/weekly/weekly.csv')
+def bucket_id_from_path(p: Path) -> int:
+    return int(p.name.split("agent_bucket=")[1].split(".parquet")[0])
+
+train_files = {bucket_id_from_path(p): p for p in TRAIN_DIR.glob("agent_bucket=*.parquet")}
+test_files  = {bucket_id_from_path(p): p for p in TEST_DIR.glob("agent_bucket=*.parquet")}
+common_buckets = sorted(set(train_files).intersection(test_files))
+
+if not common_buckets:
+    raise RuntimeError("No matching agent_bucket files found between train and test dirs.")
+
+for b in common_buckets:
+    train_path = train_files[b]
+    test_path  = test_files[b]
+
+    print(f"\n=== Processing bucket {b} ===")
+    train_data = pd.read_parquet(train_path)
+    test_data  = pd.read_parquet(test_path)
+    score_weekly_partitioned(train_data, test_data, OUT_DIR)
