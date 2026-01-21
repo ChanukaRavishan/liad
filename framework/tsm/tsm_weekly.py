@@ -150,11 +150,6 @@ def score_weekly_partitioned(train, test,
 TRAIN_DIR = Path("../../processed/trial5/2m/scaled_global/train_weekly")
 TEST_DIR  = Path("../../processed/trial5/2m/scaled_global/test_weekly")
 
-OUT_DIR = "../../processed/trial5/2m/weekly_anomaly/weekly.csv"
-
-OUT_DIR_path = Path("../../processed/trial5/2m/weekly_anomaly/weekly.csv")
-
-OUT_DIR_path.mkdir(parents=True, exist_ok=True)
 
 def bucket_id_from_path(p: Path) -> int:
     return int(p.name.split("agent_bucket=")[1].split(".csv")[0])
@@ -173,4 +168,4 @@ for b in common_buckets:
     print(f"\n=== Processing bucket {b} ===")
     train_data = pd.read_csv(train_path)
     test_data  = pd.read_csv(test_path)
-    score_weekly_partitioned(train_data, test_data, OUT_DIR)
+    score_weekly_partitioned(train_data, test_data, '../../processed/trial5/2m/weekly.csv')
