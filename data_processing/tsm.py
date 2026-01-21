@@ -211,8 +211,8 @@ def main():
                         help="Force rebuild output files even if they exist")
     args = parser.parse_args()
 
-    train_files = {bucket_id_from_path(p): p for p in train_dir.glob("agent_bucket=*.parquet")}
-    test_files  = {bucket_id_from_path(p): p for p in test_dir.glob("agent_bucket=*.parquet")}
+    train_files = {bucket_id_from_path(p): p for p in train_dir.glob("agent_bucket=*.parquet") if bucket_id_from_path(p) > 1800}
+    test_files  = {bucket_id_from_path(p): p for p in test_dir.glob("agent_bucket=*.parquet") if bucket_id_from_path(p) > 1800}
 
     common = sorted(set(train_files).intersection(test_files))
     
