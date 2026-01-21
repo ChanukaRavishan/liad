@@ -150,9 +150,9 @@ def score_weekly_partitioned(train, test,
 TRAIN_DIR = Path("../../processed/trial5/2m/scaled_global/train_weekly")
 TEST_DIR  = Path("../../processed/trial5/2m/scaled_global/test_weekly")
 
-OUT_DIR = "../processed/trial5/2m/weekly_anomaly/weekly.csv"
+OUT_DIR = "../../processed/trial5/2m/weekly_anomaly/weekly.csv"
 
-OUT_DIR_path = Path("../processed/trial5/2m/weekly_anomaly/weekly.csv")
+OUT_DIR_path = Path("../../processed/trial5/2m/weekly_anomaly/weekly.csv")
 
 OUT_DIR_path.mkdir(parents=True, exist_ok=True)
 
