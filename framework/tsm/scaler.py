@@ -81,13 +81,13 @@ def transform_and_write_all(
 
 
 
-TRAIN_DIR = Path("../../processed/trial5/10k/whole/train_weekly")
-TEST_DIR  = Path("../../processed/trial5/10k/whole/test_weekly")
+TRAIN_DIR = Path("../../processed/trial5/2m/train_weekly")
+TEST_DIR  = Path("../../processed/trial5/2m/test_weekly")
 
-OUT_TRAIN_DIR = Path("../../processed/trial5/10k/whole/scaled_global/train_weekly")
-OUT_TEST_DIR  = Path("../../processed/trial5/10k/whole/scaled_global/test_weekly")
+OUT_TRAIN_DIR = Path("../../processed/trial5/2m/scaled_global/train_weekly")
+OUT_TEST_DIR  = Path("../../processed/trial5/2m/scaled_global/test_weekly")
 
-SCALER_PATH = Path("../../processed/trial5/10k/whole/scaled_global/robust_scaler.joblib")
+SCALER_PATH = Path("../../processed/trial5/2m/scaled_global/robust_scaler.joblib")
 
 train_files = {bucket_id_from_path(p): p for p in TRAIN_DIR.glob("agent_bucket=*.csv")}
 test_files  = {bucket_id_from_path(p): p for p in TEST_DIR.glob("agent_bucket=*.csv")}
