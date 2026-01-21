@@ -152,7 +152,9 @@ TEST_DIR  = Path("../../processed/trial5/2m/scaled_global/test_weekly")
 
 OUT_DIR = "../processed/trial5/2m/weekly_anomaly/weekly.csv"
 
-OUT_DIR.mkdir(parents=True, exist_ok=True)
+OUT_DIR_path = Path("../processed/trial5/2m/weekly_anomaly/weekly.csv")
+
+OUT_DIR_path.mkdir(parents=True, exist_ok=True)
 
 def bucket_id_from_path(p: Path) -> int:
     return int(p.name.split("agent_bucket=")[1].split(".csv")[0])
