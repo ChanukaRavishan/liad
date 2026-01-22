@@ -11,6 +11,7 @@ from sklearn.metrics import precision_recall_curve, auc
 from pathlib import Path
 from typing import Tuple, List
 
+
 def append_df(df: pd.DataFrame, path: str):
     header = not os.path.exists(path)
     df.to_csv(path, mode="a", index=False, header=header)
@@ -118,9 +119,6 @@ def score_weekly_partitioned(train, test,
     """
     n_parts=100 means ~1% per shard. Use 200/500 if merge still heavy.
     """
-    # remove old output (we append)
-    if os.path.exists(out_path):
-        os.remove(out_path)
 
     # partition id
     train["pid"] = (train["agent"].values % n_parts).astype(np.int16)
@@ -150,6 +148,11 @@ def score_weekly_partitioned(train, test,
 TRAIN_DIR = Path("../../processed/trial5/2m/scaled_global/train_weekly")
 TEST_DIR  = Path("../../processed/trial5/2m/scaled_global/test_weekly")
 
+OUT_PATH = "../../processed/trial5/2m/weekly.csv"
+TMP_DIR  = Path("../../processed/trial5/2m/_tmp_weekly_parts")
+TMP_DIR.mkdir(parents=True, exist_ok=True)
+
+
 
 def bucket_id_from_path(p: Path) -> int:
     return int(p.name.split("agent_bucket=")[1].split(".csv")[0])
@@ -161,11 +164,37 @@ common_buckets = sorted(set(train_files).intersection(test_files))
 if not common_buckets:
     raise RuntimeError("No matching agent_bucket files found between train and test dirs.")
 
-for b in common_buckets:
+def process_bucket(b: int, n_parts: int = 100) -> str:
     train_path = train_files[b]
     test_path  = test_files[b]
 
-    print(f"\n=== Processing bucket {b} ===")
+    out_tmp = TMP_DIR / f"weekly_bucket={b}.csv"
+    if out_tmp.exists():
+        out_tmp.unlink()
+
+    print(f"=== Processing bucket {b} ===")
     train_data = pd.read_csv(train_path)
     test_data  = pd.read_csv(test_path)
-    score_weekly_partitioned(train_data, test_data, '../../processed/trial5/2m/weekly.csv')
+
+    score_weekly_partitioned(train_data, test_data, str(out_tmp), n_parts=n_parts)
+
+    del train_data, test_data
+    gc.collect()
+    return str(out_tmp)
+
+# ----- run buckets in parallel -----
+N_JOBS = 30
+
+tmp_files = Parallel(n_jobs=N_JOBS, backend="loky", verbose=10)(
+    delayed(process_bucket)(b, 100) for b in common_buckets
+)
+if os.path.exists(OUT_PATH):
+    os.remove(OUT_PATH)
+
+first = True
+for f in tmp_files:
+    df = pd.read_csv(f)
+    df.to_csv(OUT_PATH, mode="a", index=False, header=first)
+    first = False
+
+print("Done. Saved:", OUT_PATH)
