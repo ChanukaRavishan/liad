@@ -110,87 +110,96 @@ def score_partition(train_p: pd.DataFrame, test_p: pd.DataFrame) -> pd.DataFrame
     if test_p.empty:
         return pd.DataFrame(columns=["agent", "anomaly_score"])
 
-    # Weights (Optimized for Z-scored inputs)
-    alpha, beta, gamma, delta = 0.2808, 0.1460, 0.1460, 0.2039
-    a, b, c, d, e = 0.0240, 0.3315, 0.9338, 0.9280, -0.6382
+    # Weights
+    alpha, beta, gamma, delta = 0.280890, 0.146024, 0.146024, 0.203904
+    a, b, c, d, e = 0.024093, 0.331588, 0.933864, 0.928097, -0.638238
     
     KEYS = ["agent", "day_type", "time_segment"]
+    # Metrics to Z-score
     METRICS = [
         "unique_location_ids", "avg_distance_from_home_km", 
-        "avg_speed_kmh", "max_stay_duration", "max_distance_from_home"
+        "avg_speed_kmh", "max_stay_duration", "max_distance_from_home", "transformations"
     ]
 
-    # 1. Pre-calculate training stats (Mean and Std) for Z-scoring
+    # 1. Group Training Stats
     train_stats = train_p.groupby(KEYS)[METRICS].agg(["mean", "std"]).reset_index()
-    train_stats.columns = [
-        f"{col[0]}_{col[1]}" if col[1] else col[0] for col in train_stats.columns
-    ]
+    train_stats.columns = [f"{c[0]}_{c[1]}" if c[1] else c[0] for c in train_stats.columns]
 
-    # 2. Merge test with stats
+    # 2. Preparation
     test_p = test_p.reset_index(drop=True)
     test_p["test_row_id"] = np.arange(len(test_p), dtype=np.int64)
-    
-    # Left merge to identify "New Behavior" (Discovery)
+
+    # Left merge to keep test rows that have NO match in training (The "New Routine" Anomaly)
     scored_pairs = test_p.merge(train_stats, on=KEYS, how="left")
     
-    # 3. Handle Discovery (No matching train profile)
-    # If no history exists, we assign a high fixed penalty (e.g., 5.0 sigma)
+    # Identify rows with no historical match in this specific time/day segment
     discovery_mask = scored_pairs["unique_location_ids_mean"].isna()
+
+    # 3. Vectorized Z-Scoring
+    def calculate_z(df, col):
+        # Use a small epsilon to avoid division by zero
+        # clip(0) handles the log1p warning if data was somehow negative
+        val = df[col].clip(lower=0)
+        mu = df[f"{col}_mean"]
+        sigma = df[f"{col}_std"].fillna(0) + 0.001
+        return (val - mu).abs() / sigma
+
+    z_count = calculate_z(scored_pairs, "unique_location_ids")
+    z_dist  = calculate_z(scored_pairs, "avg_distance_from_home_km")
+    z_speed = calculate_z(scored_pairs, "avg_speed_kmh")
+    z_max_d = calculate_z(scored_pairs, "max_distance_from_home")
+    z_trans = calculate_z(scored_pairs, "transformations")
     
-    def get_z_score(df, col):
-        # (Test - Mean) / (Std + epsilon)
-        diff = (df[col] - df[f"{col}_mean"]).abs()
-        return diff / (df[f"{col}_std"] + 0.001)
+    # Log-transform for stay duration to handle heavy tails
+    # log1p(|test - mean|) / sigma_log
+    z_stay = (np.log1p(scored_pairs["max_stay_duration"].clip(0)) - 
+              np.log1p(scored_pairs["max_stay_duration_mean"].clip(0))).abs()
 
-    # 4. Calculate Individual Z-Scores
-    z_count = get_z_score(scored_pairs, "unique_location_ids")
-    z_dist  = get_z_score(scored_pairs, "avg_distance_from_home_km")
-    z_speed = get_z_score(scored_pairs, "avg_speed_kmh")
-    z_stay  = (np.log1p(scored_pairs["max_stay_duration"]) - np.log1p(scored_pairs["max_stay_duration_mean"])).abs()
-    z_max_d = get_z_score(scored_pairs, "max_distance_from_home")
-
-    # 5. Handle Set Logic (Novelty)
-    # We still need the original train_p for set comparisons
-    pairs_for_sets = test_p.merge(train_p[KEYS + ["unique_locs", "poi_dict", "dominent_poi"]], on=KEYS, how="inner")
+    # 4. Set Differences (Inner Join required to compare specific lists)
+    pairs_inner = test_p.merge(train_p[KEYS + ["unique_locs", "poi_dict", "dominent_poi"]], on=KEYS, how="inner")
     
-    # Default values for set differences
-    new_locs_val = np.zeros(len(scored_pairs))
-    new_pois_val = np.zeros(len(scored_pairs))
-    dom_changed  = np.zeros(len(scored_pairs))
-
-    if not pairs_for_sets.empty:
-        # Calculate set diffs for existing pairs
-        loc_diffs = [
-            len(set(ast.literal_eval(t)) - set(ast.literal_eval(r))) 
-            for t, r in zip(pairs_for_sets["unique_locs_x"], pairs_for_sets["unique_locs_y"])
-        ]
-        poi_diffs = [
-            len(set(ast.literal_eval(t)) - set(ast.literal_eval(r))) 
-            for t, r in zip(pairs_for_sets["poi_dict_x"], pairs_for_sets["poi_dict_y"])
-        ]
+    if not pairs_inner.empty:
+        # Vectorized Set Diffs
+        new_locs_arr = np.fromiter(
+            (len(set(ast.literal_eval(t)) - set(ast.literal_eval(r))) 
+             for t, r in zip(pairs_inner["unique_locs_x"], pairs_inner["unique_locs_y"])),
+            dtype=np.float32, count=len(pairs_inner))
         
-        # Map back to scored_pairs using test_row_id
-        temp_map = pairs_for_sets.groupby("test_row_id").agg({
-            "dominent_poi_x": "first" # logic for dom change below
-        })
-        # ... (Simplified for brevity: in production, use a map or join)
+        new_pois_arr = np.fromiter(
+            (len(set(ast.literal_eval(t)) - set(ast.literal_eval(r))) 
+             for t, r in zip(pairs_inner["poi_dict_x"], pairs_inner["poi_dict_y"])),
+            dtype=np.float32, count=len(pairs_inner))
 
-    # 6. Final Weighted Sum
-    total_score = (
+        dom_changed_arr = (pairs_inner["dominent_poi_x"] != pairs_inner["dominent_poi_y"]).astype(np.float32)
+
+        # Map these back to the main scored_pairs dataframe (min aggregation for best-match)
+        pairs_inner["tmp_score"] = (delta * new_locs_arr) + (e * new_pois_arr) + (d * dom_changed_arr)
+        set_scores = pairs_inner.groupby("test_row_id")["tmp_score"].min()
+        scored_pairs = scored_pairs.join(set_scores, on="test_row_id")
+    else:
+        scored_pairs["tmp_score"] = 0.0
+
+    # 5. Combine Components
+    # Fillna(2.0) assumes that if we don't know the variance, we assume a moderate deviation
+    final_score = (
         (alpha * z_count.fillna(2.0)) +
         (beta  * z_dist.fillna(2.0)) +
         (gamma * z_speed.fillna(2.0)) +
         (c * z_max_d.fillna(2.0)) +
-        (a * z_stay.fillna(2.0))
+        (b * z_trans.fillna(2.0)) +
+        (a * z_stay.fillna(2.0)) +
+        scored_pairs["tmp_score"].fillna(0.0)
     )
 
-    total_score[discovery_mask] += 5.0 
+    # Apply Discovery Penalty: If the agent has NO records for this time_segment/day_type
+    # we assign it the "Max" potential anomaly for that row.
+    final_score[discovery_mask] = final_score.max() if not final_score.empty else 10.0
 
-    scored_pairs["pair_score"] = total_score
+    scored_pairs["anomaly_score"] = final_score
 
-    out = scored_pairs.groupby("agent", sort=False)["pair_score"].max().reset_index()
-    out.rename(columns={"pair_score": "anomaly_score"}, inplace=True)
-
+    # 6. Final Aggregation
+    # Per-row min (best match to history), then per-agent max (strongest signal)
+    out = scored_pairs.groupby("agent", sort=False)["anomaly_score"].max().reset_index()
     return out
 
 
