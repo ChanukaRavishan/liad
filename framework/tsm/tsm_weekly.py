@@ -19,12 +19,7 @@ def append_df(df: pd.DataFrame, path: str):
 
 
 def score_partition(train_p: pd.DataFrame, test_p: pd.DataFrame) -> pd.DataFrame:
-    """
-    Compute anomaly score for agents present in this partition.
-    Rule:
-      For each test row, compare to all train rows with same (agent, day_type, time_segment),
-      keep min score; then agent score = max over its test rows of these mins.
-    """
+    
     if test_p.empty:
         return pd.DataFrame(columns=["agent", "anomaly_score"])
 
@@ -105,7 +100,7 @@ def score_partition(train_p: pd.DataFrame, test_p: pd.DataFrame) -> pd.DataFrame
     min_df = min_per_test.to_frame("min_score").join(test_agents, how="left")
 
     # max per agent
-    out = min_df.groupby("agent", sort=False)["min_score"].sum().reset_index()
+    out = min_df.groupby("agent", sort=False)["min_score"].max().reset_index()
     out.rename(columns={"min_score": "anomaly_score"}, inplace=True)
 
     return out
@@ -182,7 +177,6 @@ def process_bucket(b: int, n_parts: int = 100) -> str:
     gc.collect()
     return str(out_tmp)
 
-# ----- run buckets in parallel -----
 N_JOBS = 30
 
 tmp_files = Parallel(n_jobs=N_JOBS, backend="loky", verbose=10)(

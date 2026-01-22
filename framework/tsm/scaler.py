@@ -20,13 +20,10 @@ def fit_global_robust_scaler(
     train_files: dict,
     numeric_cols=NUMERIC_COLS,
     fit_on_label0: bool = True,
-    sample_per_bucket: int | None = 200_000,   # set None to use all rows (may be huge)
+    sample_per_bucket: int | None = 200_000,
     random_state: int = 42,
 ) -> RobustScaler:
-    """
-    Fit ONE RobustScaler on (optionally) normal train rows across ALL buckets.
-    Uses optional sampling per bucket to avoid OOM.
-    """
+    
     rng = np.random.default_rng(random_state)
     chunks = []
 
