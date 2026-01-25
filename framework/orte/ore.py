@@ -9,9 +9,9 @@ def bucket_id_from_path(p: Path) -> int:
 
 
 def main():
-    TRAIN_DIR = Path("../processed/trial5/sim1/2m/ore/stop_past")
-    TEST_DIR  = Path("../processed/trial5/sim1/2m/ore/stop_future")
-    OUT_RESULTS_DIR = Path("../processed/trial5/sim1/2m")
+    TRAIN_DIR = Path("../../processed/trial5/sim1/2m/ore/stop_past")
+    TEST_DIR  = Path("../../processed/trial5/sim1/2m/ore/stop_future")
+    OUT_RESULTS_DIR = Path("../../processed/trial5/sim1/2m")
     OUT_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
     OUT_CSV = OUT_RESULTS_DIR / "ore.csv"
