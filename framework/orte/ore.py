@@ -4,6 +4,9 @@ from pathlib import Path
 
 def add_features(df):
     df = df.copy()
+
+    df['started_at']  = pd.to_datetime(df['started_at'])
+    df['finished_at'] = pd.to_datetime(df['finished_at'])
     
     df['start_minute'] = df['started_at'].dt.hour * 60 + df['started_at'].dt.minute
     
