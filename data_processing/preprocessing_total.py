@@ -2,11 +2,12 @@ from pathlib import Path
 import pandas as pd
 from helper_functions import agent_type_filter
 
-TRAIN_DIR = Path("../data/trail5/2m/stop_past")
-TEST_DIR  = Path("../data/trail5/2m/stop_future")
+#uncomment the agent filter later
+TRAIN_DIR = Path("../data/trail5/sim2/10k/stop_past")
+TEST_DIR  = Path("../data/trail5/sim2/10k/stop_future")
 
-OUT_TRAIN_DIR = Path("../processed/trial5/2m/whole/stop_past")
-OUT_TEST_DIR  = Path("../processed/trial5/2m/whole/stop_future")
+OUT_TRAIN_DIR = Path("../processed/trial5/sim2/10k/whole/stop_past")
+OUT_TEST_DIR  = Path("../processed/trial5/sim2/10k/whole/stop_future")
 
 OUT_TRAIN_DIR.mkdir(parents=True, exist_ok=True)
 OUT_TEST_DIR.mkdir(parents=True, exist_ok=True)
@@ -34,9 +35,9 @@ for b in common_buckets:
     test_data  = pd.read_parquet(test_path)
     test_data.rename(columns={"user_id": "agent", "category": "poi_category"}, inplace=True)
 
-    residents = agent_type_filter(train_data)
-    train_data = train_data[train_data["agent"].isin(residents)].copy()
-    test_data  = test_data[test_data["agent"].isin(residents)].copy()
+    # residents = agent_type_filter(train_data)
+    # train_data = train_data[train_data["agent"].isin(residents)].copy()
+    # test_data  = test_data[test_data["agent"].isin(residents)].copy()
 
     train_data["duration_min"] = (
         pd.to_datetime(train_data["finished_at"]) - pd.to_datetime(train_data["started_at"])

@@ -200,11 +200,11 @@ def process_bucket(b, train_files, test_files, out_train_dir, out_test_dir, repa
     return f"Finished Bucket {b}"
 
 def main():
-    train_dir = Path("../processed/trial5/2m/stop_past")
-    test_dir  = Path("../processed/trial5/2m/stop_future")
+    train_dir = Path("../processed/trial5/sim2/10k/whole/stop_past")
+    test_dir  = Path("../processed/trial5/sim2/10k/whole/stop_future")
 
-    out_train_dir = Path("../processed/trial5/2m/train_weekly")
-    out_test_dir  = Path("../processed/trial5/2m/test_weekly")
+    out_train_dir = Path("../processed/trial5/sim2/10k/whole/train_weekly")
+    out_test_dir  = Path("../processed/trial5/sim2/10k/whole/test_weekly")
 
     parser = ArgumentParser(description="Build monthly profiles per agent_bucket for train & test")
     parser.add_argument("--repartition", action="store_true",
