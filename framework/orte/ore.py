@@ -2,6 +2,24 @@ import pandas as pd
 import joblib
 from pathlib import Path
 
+def add_features(df):
+    df = df.copy()
+    
+    df['start_minute'] = df['started_at'].dt.hour * 60 + df['started_at'].dt.minute
+    
+    def _len_trans(x):
+        if isinstance(x, (list, tuple)):
+            return len(x)
+        try:
+            return len(eval(x))
+        except:
+            return np.nan
+    
+    df['len_trans'] = df['transformation'].apply(_len_trans)
+    df['speed_imbalance'] = (df['avg_speed_first_half'] - df['avg_speed_second_half']).abs()
+    
+    return df
+
 
 
 def bucket_id_from_path(p: Path) -> int:
@@ -34,6 +52,8 @@ def main():
 
         test_path = test_files[b]
         test_data = pd.read_csv(test_path)
+
+        test_data = add_features(test_data)
 
         # --- feature prep ---
         X_new = test_data[feature_cols].fillna(0.0)
