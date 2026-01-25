@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 def bucket_id_from_path(p: Path) -> int:
-    return int(p.name.split("agent_bucket=")[1].split(".parquet")[0])
+    return int(p.name.split("agent_bucket=")[1].split(".csv")[0])
 
 
 def main():
@@ -16,8 +16,8 @@ def main():
 
     OUT_CSV = OUT_RESULTS_DIR / "ore.csv"
 
-    train_files = {bucket_id_from_path(p): p for p in TRAIN_DIR.glob("agent_bucket=*.parquet")}
-    test_files  = {bucket_id_from_path(p): p for p in TEST_DIR.glob("agent_bucket=*.parquet")}
+    train_files = {bucket_id_from_path(p): p for p in TRAIN_DIR.glob("agent_bucket=*.csv")}
+    test_files  = {bucket_id_from_path(p): p for p in TEST_DIR.glob("agent_bucket=*.csv")}
     common_buckets = sorted(set(train_files).intersection(test_files))
     if not common_buckets:
         raise RuntimeError("No matching agent_bucket files found between train and test dirs.")
@@ -33,7 +33,7 @@ def main():
         print(f"\n=== Processing bucket {b} ===")
 
         test_path = test_files[b]
-        test_data = pd.read_parquet(test_path)
+        test_data = pd.read_csv(test_path)
 
         # --- feature prep ---
         X_new = test_data[feature_cols].fillna(0.0)
