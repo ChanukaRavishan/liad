@@ -1,6 +1,7 @@
 import pandas as pd
 import joblib
 from pathlib import Path
+import numpy as np
 
 def add_features(df):
     df = df.copy()
